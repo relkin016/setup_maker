@@ -1,8 +1,9 @@
 # Setup Maker
 
 Кроссплатформенный (Linux + Windows) конструктор установщиков Windows.
-Редактор проектов устроен как в **Smart Install Maker** (разделы слева, формы справа),
-а сам установщик выглядит как **Inno Setup**: классический мастер 497×360 с теми же страницами и текстами.
+Редактор проектов устроен как в **Smart Install Maker**: разделы слева, простые формы справа,
+обычные флажки («Ярлык на рабочем столе», «Запустить программу после установки») вместо скриптов.
+Сам установщик выглядит как **Inno Setup**: классический мастер 497×360 с теми же страницами и текстами.
 
 ## Состав
 
@@ -18,9 +19,7 @@
 setupmaker                                  # графический редактор
 setupmaker new "My App" --exe MyApp.exe --files bin -o myapp.smp
 setupmaker build myapp.smp --verify         # собрать setup.exe и проверить CRC
-setupmaker import old.iss -o old.smp -D InnoDir=/path/to/inno   # конвертация Inno-скрипта
 setupmaker import "GTA ZA/setup.exe" -o gta                     # разбор готового Inno setup.exe в проект
-setupmaker build old.iss -D InnoDir=/path/to/inno               # или собрать .iss напрямую
 setupmaker pack gamedata -o data1.smpk --method lzma2 --dict 256 # внешний архив
 setupmaker verify compiled/setup.exe
 ```
@@ -29,7 +28,7 @@ setupmaker verify compiled/setup.exe
 
 ## Импорт готового установщика Inno Setup (`setup.exe`)
 
-`setupmaker import setup.exe [-o папка]` (или кнопка «📦 Импорт setup.exe» в редакторе) разбирает
+`setupmaker import setup.exe [-o папка]` (или кнопка «Импорт setup.exe» в редакторе) разбирает
 скомпилированный установщик **Inno Setup 5.2.5 – 6.3** (ANSI и Unicode) и создаёт папку проекта
 (по умолчанию `setup_project` рядом с setup.exe):
 
@@ -48,9 +47,19 @@ setupmaker verify compiled/setup.exe
 Для `.arc` положите `unarc.dll` из FreeArc в `tools/` и добавьте в «Инструменты» —
 ISDone.dll из оригинала не используется (прогресс, время, отмена и откат у нас встроены).
 
+## Редактор
+
+- **Информация** — название, версия, главный exe и быстрые флажки: ярлык в «Пуске», на рабочем столе
+  (всегда / спросить пользователя), ярлык удаления, «Запустить программу» в конце установки.
+- Папки выбираются из списка («Папка программы», «Program Files», «AppData», «Рабочий стол»…),
+  условия — галочками компонентов и флажков.
+- У ярлыка есть «Создавать: всегда / спросить (флажок отмечен / снят)» — флажок в установщике
+  создаётся автоматически.
+- Редкие настройки спрятаны в «Ещё».
+
 ## Проект (`.smp`, TOML)
 
-Все разделы Inno Setup есть в проекте: `[app]` (AppName, AppVersion, AppId…), `[setup]` (страницы мастера,
+В проекте есть разделы: `[app]` (AppName, AppVersion, AppId…), `[setup]` (страницы мастера,
 папки, лицензия, пароль, место на диске), `[interface]` (картинки, иконка, шрифт мастера `font`/`font_size`, языки ru/en/uk), `[requirements]`,
 `[compression]`, `[output]` (в т. ч. разбиение на тома), `[uninstall]`, а также списки
 `types`, `components`, `tasks`, `files`, `archives`, `tools`, `dirs`, `shortcuts`, `registry`,
@@ -61,6 +70,7 @@ ISDone.dll из оригинала не используется (прогрес
 {uninstallexe} {%ENV|def} {reg:HKLM\Key,Value|def} {param:Name|def} {cm:LaunchProgram,App}`
 и переменные сборки `{#Name}` (раздел `[defines]`).
 
+В редакторе константы выбираются из списков, вручную их писать не нужно.
 Условия (`components`, `tasks`, `check`) — выражения как в Inno: `voice\rus or voice\eng`,
 `not Is64BitInstallMode`, `FileExists('{app}\x.exe')`, `IsWin64`, `IsAdmin`, `RegKeyExists('HKLM\…')`.
 
@@ -104,7 +114,7 @@ archives = ["data1.arc", "data2.smpk", "voice.7z -> {app}\\sound"]
 
 - Установщик требует **Windows 10/11** (современный Rust не поддерживает Windows 7).
 - Сам редактор есть и для **Windows 7 SP1** (`setupmaker-*-windows7-x64.zip` / `-x86.zip`):
-  импорт/разбор `setup.exe`, конвертация `.iss`, сборка и упаковка работают. Графическому
+  импорт/разбор `setup.exe`, сборка и упаковка работают. Графическому
   редактору нужен драйвер с OpenGL 2.0+; без него (ВМ, «стандартный VGA») используйте консоль:
   `setupmaker import setup.exe -o папка`. Собранные установщики по-прежнему требуют Windows 10+.
 - Код `[Code]` на Pascal не исполняется. Импортёр переносит из него активные вызовы ISDone

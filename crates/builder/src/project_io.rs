@@ -1,7 +1,6 @@
-//! Loading / saving projects (.smp = TOML) and importing .iss on the fly.
+//! Loading / saving projects (.smp = TOML).
 
 use smk_core::project::Project;
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub fn load(path: &Path) -> Result<Project, String> {
@@ -15,16 +14,11 @@ pub fn save(p: &Project, path: &Path) -> Result<(), String> {
     std::fs::write(path, header + &s).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
-/// Load `.smp` or import `.iss`. Returns (project, base dir, import warnings).
-pub fn load_any(path: &Path, defs: &BTreeMap<String, String>) -> Result<(Project, PathBuf, Vec<String>), String> {
+/// Load `.smp`. Returns (project, base dir).
+pub fn load_with_dir(path: &Path) -> Result<(Project, PathBuf), String> {
     let dir = path.parent().map(|p| p.to_path_buf()).filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| PathBuf::from("."));
     let dir = dir.canonicalize().map(strip_verbatim).unwrap_or(dir);
-    if path.extension().map(|e| e.eq_ignore_ascii_case("iss")).unwrap_or(false) {
-        let r = crate::iss::import(path, defs)?;
-        Ok((r.project, dir, r.warnings))
-    } else {
-        Ok((load(path)?, dir, vec![]))
-    }
+    Ok((load(path)?, dir))
 }
 
 /// `\\?\C:\x` -> `C:\x` (canonicalize on Windows returns verbatim paths).

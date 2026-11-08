@@ -644,6 +644,16 @@ fn archive_raw_size(path: &Path) -> Option<u64> {
 
 // ---------------------------------------------------------------- main build
 
+/// `XXXX-...` / `{XXXX-...}` / `{{XXXX-...}` -> `{XXXX-...}`.
+pub fn normalize_guid(s: &str) -> String {
+    let core = s.trim().trim_matches(|c| c == '{' || c == '}');
+    if core.is_empty() {
+        String::new()
+    } else {
+        format!("{{{}}}", core)
+    }
+}
+
 pub fn validate(p: &Project) -> Vec<String> {
     let mut errs = Vec::new();
     if p.app.name.trim().is_empty() {
@@ -691,7 +701,8 @@ pub fn build(project: &Project, project_dir: &Path, bo: &BuildOptions) -> R<Buil
         p.app.app_id = deterministic_guid(&format!("{}|{}", p.app.name, p.app.publisher));
         warnings.push(format!("AppId не задан, использован {} — сохраните его в проекте, чтобы обновления ставились поверх", p.app.app_id));
     }
-    p.app.app_id = crate::iss::normalize_guid(&p.app.app_id);
+    p.app.app_id = normalize_guid(&p.app.app_id);
+    p.expand_shortcut_asks();
 
     // ---- files
     log(&format!("Проект: {} {}", p.app.name, p.app.version));

@@ -667,6 +667,11 @@ pub struct Shortcut {
     pub icon_index: i32,
     #[serde(skip_serializing_if = "is_empty")]
     pub comment: String,
+    /// Ask the user with a checkbox in the installer:
+    /// "" = always create, "checked" / "unchecked" = checkbox state by default.
+    /// The builder turns it into a task.
+    #[serde(skip_serializing_if = "is_empty")]
+    pub ask: String,
     #[serde(flatten)]
     pub when: Conditions,
 }
@@ -761,8 +766,23 @@ impl Default for DeleteItem {
     }
 }
 
+/// `{group}\\App` -> (`{group}`, `App`). No leading constant -> ("", whole).
+pub fn split_location(path: &str) -> (&str, &str) {
+    if path.starts_with('{') {
+        if let Some(end) = path.find('}') {
+            let rest = &path[end + 1..];
+            return (&path[..=end], rest.trim_start_matches('\\'));
+        }
+    }
+    ("", path)
+}
+
+pub fn is_desktop(loc: &str) -> bool {
+    matches!(loc, "{autodesktop}" | "{desktop}" | "{commondesktop}" | "{userdesktop}")
+}
+
 impl Project {
-    /// A sensible new project, equivalent to the user's usual Inno template.
+    /// A sensible new project: Start menu + desktop shortcut (asked), launch checkbox.
     pub fn template(name: &str, exe: &str, files_dir: &str) -> Project {
         let mut p = Project::default();
         p.app.name = name.to_string();
@@ -774,12 +794,6 @@ impl Project {
         if !files_dir.is_empty() {
             p.files.push(FileItem { source: format!("{}\\*", files_dir), ..Default::default() });
         }
-        p.tasks.push(Task {
-            name: "desktopicon".into(),
-            description: "{cm:CreateDesktopIcon}".into(),
-            group: "{cm:AdditionalIcons}".into(),
-            ..Default::default()
-        });
         if !exe.is_empty() {
             p.shortcuts.push(Shortcut {
                 name: "{group}\\{#AppName}".into(),
@@ -789,7 +803,7 @@ impl Project {
             p.shortcuts.push(Shortcut {
                 name: "{autodesktop}\\{#AppName}".into(),
                 target: format!("{{app}}\\{}", exe),
-                when: Conditions { tasks: "desktopicon".into(), ..Default::default() },
+                ask: "checked".into(),
                 ..Default::default()
             });
             p.run.push(RunItem {
@@ -810,6 +824,84 @@ impl Project {
         p
     }
 
+    /// Builder step: shortcuts with `ask` get a checkbox (task) in the installer.
+    /// Shortcuts of the same kind and default state share one checkbox.
+    pub fn expand_shortcut_asks(&mut self) {
+        let mut made: Vec<(String, String)> = Vec::new(); // (description|ask, task name)
+        for i in 0..self.shortcuts.len() {
+            let ask = std::mem::take(&mut self.shortcuts[i].ask);
+            if ask.is_empty() {
+                continue;
+            }
+            let (loc, leaf) = split_location(&self.shortcuts[i].name);
+            let desc = match loc {
+                l if is_desktop(l) => "{cm:CreateDesktopIcon}".to_string(),
+                "{quicklaunch}" => "{cm:CreateQuickLaunchIcon}".to_string(),
+                _ => format!("{{cm:CreateShortcutIcon,{}}}", leaf.replace(',', " ")),
+            };
+            let key = format!("{}|{}", desc, ask);
+            let task = match made.iter().find(|m| m.0 == key) {
+                Some(m) => m.1.clone(),
+                None => {
+                    let mut n = made.len() + 1;
+                    while self.tasks.iter().any(|t| t.name.eq_ignore_ascii_case(&format!("shortcut{}", n))) {
+                        n += 1;
+                    }
+                    let name = format!("shortcut{}", n);
+                    self.tasks.push(Task {
+                        name: name.clone(),
+                        description: desc,
+                        group: "{cm:AdditionalIcons}".into(),
+                        unchecked: ask == "unchecked",
+                        ..Default::default()
+                    });
+                    made.push((key, name.clone()));
+                    name
+                }
+            };
+            let t = &mut self.shortcuts[i].when.tasks;
+            *t = if t.trim().is_empty() { task } else { format!("({}) and {}", t, task) };
+        }
+    }
+
+    /// Reverse of [`expand_shortcut_asks`]: a plain task used only as the
+    /// condition of shortcuts becomes the shortcuts' `ask` flag (used after import).
+    pub fn simplify_shortcut_tasks(&mut self) {
+        let mut i = 0;
+        while i < self.tasks.len() {
+            let t = &self.tasks[i];
+            let name = t.name.clone();
+            let plain = !t.exclusive && t.components.is_empty() && t.check.is_empty() && t.min_version.is_empty() && t.only_below_version.is_empty();
+            let used_by_sc = self.shortcuts.iter().any(|s| s.when.tasks.trim().eq_ignore_ascii_case(&name));
+            if !plain || name.is_empty() || !used_by_sc || self.task_used_outside_shortcuts(&name) {
+                i += 1;
+                continue;
+            }
+            let ask = if t.unchecked { "unchecked" } else { "checked" };
+            for s in self.shortcuts.iter_mut().filter(|s| s.when.tasks.trim().eq_ignore_ascii_case(&name)) {
+                s.when.tasks.clear();
+                s.ask = ask.into();
+            }
+            self.tasks.remove(i);
+        }
+    }
+
+    fn task_used_outside_shortcuts(&self, name: &str) -> bool {
+        let n = name.to_ascii_lowercase();
+        let hit = |e: &str| {
+            let e = e.to_ascii_lowercase();
+            e.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '\\')).any(|w| w == n)
+        };
+        let sc_complex = self.shortcuts.iter().any(|s| !s.when.tasks.trim().eq_ignore_ascii_case(name) && hit(&s.when.tasks));
+        sc_complex
+            || self.files.iter().any(|x| hit(&x.when.tasks))
+            || self.archives.iter().any(|x| hit(&x.when.tasks))
+            || self.dirs.iter().any(|x| hit(&x.when.tasks))
+            || self.registry.iter().any(|x| hit(&x.when.tasks))
+            || self.run.iter().any(|x| hit(&x.when.tasks))
+            || self.uninstall_run.iter().any(|x| hit(&x.when.tasks))
+    }
+
     /// Language ids used by the installer (at least one).
     pub fn language_ids(&self) -> Vec<String> {
         let mut v: Vec<String> = self.interface.languages.iter().map(|l| crate::messages::normalize_lang(&l.id).to_string()).collect();
@@ -818,5 +910,40 @@ impl Project {
             v.push("en".into());
         }
         v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortcut_ask_roundtrip() {
+        let mut p = Project::template("App", "app.exe", "");
+        p.expand_shortcut_asks();
+        assert_eq!(p.tasks.len(), 1);
+        assert_eq!(p.tasks[0].description, "{cm:CreateDesktopIcon}");
+        let desk = p.shortcuts.iter().find(|s| s.name.starts_with("{autodesktop}")).unwrap();
+        assert_eq!(desk.when.tasks, p.tasks[0].name);
+        assert!(desk.ask.is_empty());
+        p.simplify_shortcut_tasks();
+        assert!(p.tasks.is_empty());
+        assert_eq!(p.shortcuts.iter().find(|s| s.name.starts_with("{autodesktop}")).unwrap().ask, "checked");
+    }
+
+    #[test]
+    fn task_used_by_files_is_kept() {
+        let mut p = Project::template("App", "app.exe", "");
+        p.expand_shortcut_asks();
+        let t = p.tasks[0].name.clone();
+        p.files.push(FileItem { source: "x".into(), when: Conditions { tasks: format!("not {}", t), ..Default::default() }, ..Default::default() });
+        p.simplify_shortcut_tasks();
+        assert_eq!(p.tasks.len(), 1);
+    }
+
+    #[test]
+    fn location_split() {
+        assert_eq!(split_location("{group}\\App"), ("{group}", "App"));
+        assert_eq!(split_location("C:\\x"), ("", "C:\\x"));
     }
 }

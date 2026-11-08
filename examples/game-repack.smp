@@ -67,11 +67,6 @@ description = "Английский"
 exclusive = true
 checked = false
 
-[[tasks]]
-name = "desktopicon"
-description = "{cm:CreateDesktopIcon}"
-group = "{cm:AdditionalIcons}"
-
 [[files]]
 source = 'game\*'
 
@@ -97,7 +92,7 @@ target = '{app}\game.exe'
 [[shortcuts]]
 name = '{autodesktop}\{#AppName}'
 target = '{app}\game.exe'
-tasks = "desktopicon"
+ask = "checked"
 
 [[shortcuts]]
 name = '{group}\{cm:UninstallProgram,{#AppName}}'

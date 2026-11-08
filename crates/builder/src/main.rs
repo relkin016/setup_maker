@@ -6,7 +6,6 @@ mod compile;
 mod gui;
 mod images;
 mod inno_exe;
-mod iss;
 mod pe;
 mod project_io;
 mod stubs;
@@ -28,7 +27,7 @@ struct Cli {
 enum Cmd {
     /// Открыть графический редактор
     Gui { project: Option<PathBuf> },
-    /// Собрать установщик из проекта (.smp) или скрипта Inno (.iss)
+    /// Собрать установщик из проекта (.smp)
     Build {
         project: PathBuf,
         /// Переопределить define: -D InnoDir=/path
@@ -38,15 +37,12 @@ enum Cmd {
         #[arg(long)]
         verify: bool,
     },
-    /// Конвертировать .iss или готовый Inno setup.exe в проект .smp
+    /// Разобрать готовый установщик Inno Setup (setup.exe) в папку проекта
     Import {
-        /// Скрипт .iss или скомпилированный установщик Inno Setup (setup.exe)
-        script: PathBuf,
-        /// Для .iss — файл .smp; для setup.exe — папка проекта
+        setup: PathBuf,
+        /// Папка проекта (по умолчанию <имя>_project рядом с setup.exe)
         #[arg(short, long)]
         out: Option<PathBuf>,
-        #[arg(short = 'D', value_parser = parse_kv)]
-        define: Vec<(String, String)>,
     },
     /// Упаковать папку во внешний архив .smpk
     Pack {
@@ -152,10 +148,7 @@ fn run_cli(cmd: Cmd) -> Result<(), String> {
     match cmd {
         Cmd::Build { project, define, verify } => {
             let defs: BTreeMap<String, String> = define.into_iter().collect();
-            let (p, dir, warns) = project_io::load_any(&project, &defs)?;
-            for w in warns {
-                eprintln!("Импорт: {}", w);
-            }
+            let (p, dir) = project_io::load_with_dir(&project)?;
             let opts = compile::BuildOptions {
                 defines: defs,
                 progress: Arc::new(progress_bar()),
@@ -171,8 +164,11 @@ fn run_cli(cmd: Cmd) -> Result<(), String> {
             }
             Ok(())
         }
-        Cmd::Import { script, out, define: _ } if is_exe(&script) => {
-            let dir = out.unwrap_or_else(|| default_import_dir(&script));
+        Cmd::Import { setup, out } => {
+            if !is_exe(&setup) {
+                return Err("ожидается установщик Inno Setup (.exe)".into());
+            }
+            let dir = out.unwrap_or_else(|| default_import_dir(&setup));
             let log = |s: &str| {
                 if s.starts_with('\r') {
                     eprint!("{}", s);
@@ -180,23 +176,12 @@ fn run_cli(cmd: Cmd) -> Result<(), String> {
                     eprintln!("{}", s);
                 }
             };
-            let r = inno_exe::import(&script, &dir, &log)?;
+            let r = inno_exe::import(&setup, &dir, &log)?;
             for w in &r.imported.warnings {
                 eprintln!("Предупреждение: {}", w);
             }
             project_io::save(&r.imported.project, &r.project_path)?;
             println!("Проект сохранён: {}", r.project_path.display());
-            Ok(())
-        }
-        Cmd::Import { script, out, define } => {
-            let defs: BTreeMap<String, String> = define.into_iter().collect();
-            let r = iss::import(&script, &defs)?;
-            for w in &r.warnings {
-                eprintln!("Предупреждение: {}", w);
-            }
-            let out = out.unwrap_or_else(|| script.with_extension("smp"));
-            project_io::save(&r.project, &out)?;
-            println!("Проект сохранён: {}", out.display());
             Ok(())
         }
         Cmd::Pack { folder, out, method, level, dict, threads } => {

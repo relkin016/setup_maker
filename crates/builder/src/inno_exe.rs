@@ -10,7 +10,6 @@
 //! ISDone calls (`{src}\*.arc` → external archives), the wizard font and
 //! welcome/finish captions; all strings are saved to `code_strings.txt`.
 
-use crate::iss::Imported;
 use smk_core::project::*;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -18,6 +17,11 @@ use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 type R<T> = Result<T, String>;
+
+pub struct Imported {
+    pub project: Project,
+    pub warnings: Vec<String>,
+}
 
 const fn ver(a: u32, b: u32, c: u32) -> u32 {
     (a << 24) | (b << 16) | (c << 8)
@@ -1454,6 +1458,7 @@ pub fn import(setup: &Path, out_dir: &Path, log: &dyn Fn(&str)) -> R<ExeImport> 
             icon: i.icon_file.clone(),
             icon_index: i.icon_index,
             comment: i.comment.clone(),
+            ask: String::new(),
             when: conds(&i.cond),
         };
         // `Filename: "x IconFilename: y Check: z"` (quoting bug in the source script)
@@ -1637,6 +1642,8 @@ pub fn import(setup: &Path, out_dir: &Path, log: &dyn Fn(&str)) -> R<ExeImport> 
     extract_files(&mut f, setup, &stem, offset1, &data, &targets, out_dir, v, log, &mut warn)?;
 
     let project_path = out_dir.join(format!("{}.smp", if base.is_empty() { "setup".to_string() } else { sanitize(&base) }));
+    let mut p = p;
+    p.simplify_shortcut_tasks();
     Ok(ExeImport { imported: Imported { project: p, warnings: warn }, project_path })
 }
 

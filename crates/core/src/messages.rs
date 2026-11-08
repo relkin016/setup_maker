@@ -151,6 +151,7 @@ const EN: Table = &[
     // custom messages commonly used in [Tasks]/[Icons]/[Run]
     ("CreateDesktopIcon", "Create a &desktop shortcut"),
     ("CreateQuickLaunchIcon", "Create a &Quick Launch shortcut"),
+    ("CreateShortcutIcon", "Create shortcut \"%1\""),
     ("AdditionalIcons", "Additional shortcuts:"),
     ("ProgramOnTheWeb", "%1 on the Web"),
     ("UninstallProgram", "Uninstall %1"),
@@ -283,6 +284,7 @@ const RU: Table = &[
     ("ViewReadme", "Просмотреть файл README"),
     ("CreateDesktopIcon", "Создать значок на &Рабочем столе"),
     ("CreateQuickLaunchIcon", "Создать значок в &Панели быстрого запуска"),
+    ("CreateShortcutIcon", "Создать ярлык «%1»"),
     ("AdditionalIcons", "Дополнительные значки:"),
     ("ProgramOnTheWeb", "Сайт %1 в Интернете"),
     ("UninstallProgram", "Деинсталлировать %1"),
@@ -415,6 +417,7 @@ const UK: Table = &[
     ("ViewReadme", "Переглянути файл README"),
     ("CreateDesktopIcon", "Створити ярлик на &Робочому столі"),
     ("CreateQuickLaunchIcon", "Створити ярлик на панелі &швидкого запуску"),
+    ("CreateShortcutIcon", "Створити ярлик «%1»"),
     ("AdditionalIcons", "Додаткові ярлики:"),
     ("ProgramOnTheWeb", "Сайт %1 в Інтернеті"),
     ("UninstallProgram", "Видалити %1"),

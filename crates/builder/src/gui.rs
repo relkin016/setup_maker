@@ -1,49 +1,150 @@
-//! Project editor GUI (Smart Install Maker–like: sections on the left,
-//! forms on the right). Built with egui, runs on Linux and Windows.
+//! Project editor GUI in the spirit of Smart Install Maker: sections on the
+//! left, simple forms on the right, plain checkboxes instead of script syntax.
+//! Built with egui, runs on Linux and Windows.
 
-use crate::{compile, iss, project_io};
-use eframe::egui::{self, Color32, RichText, Ui};
+use crate::{compile, project_io};
+use eframe::egui::{self, vec2, Align2, Color32, FontId, Margin, RichText, Rounding, Sense, Stroke, Ui};
 use smk_core::project::*;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+
+// ------------------------------------------------------------------ palette
+
+const ACCENT: Color32 = Color32::from_rgb(0x2B, 0x6C, 0xD9);
+const ACCENT_HOVER: Color32 = Color32::from_rgb(0x22, 0x5C, 0xC0);
+const ACCENT_SOFT: Color32 = Color32::from_rgb(0xE3, 0xEC, 0xFB);
+const SIDEBAR: Color32 = Color32::from_rgb(0x1C, 0x25, 0x33);
+const SIDEBAR_HOVER: Color32 = Color32::from_rgb(0x2A, 0x36, 0x48);
+const SIDEBAR_TEXT: Color32 = Color32::from_rgb(0xD5, 0xDD, 0xE8);
+const SIDEBAR_MUTED: Color32 = Color32::from_rgb(0x7D, 0x8A, 0x9C);
+const BG: Color32 = Color32::from_rgb(0xF2, 0xF4, 0xF8);
+const CARD: Color32 = Color32::WHITE;
+const BORDER: Color32 = Color32::from_rgb(0xDD, 0xE2, 0xEA);
+const TEXT: Color32 = Color32::from_rgb(0x1F, 0x27, 0x33);
+const MUTED: Color32 = Color32::from_rgb(0x6B, 0x76, 0x85);
+const HOVER: Color32 = Color32::from_rgb(0xF0, 0xF3, 0xF8);
+const OK: Color32 = Color32::from_rgb(0x1E, 0x8E, 0x3E);
+const ERR: Color32 = Color32::from_rgb(0xC6, 0x28, 0x28);
+const WARN: Color32 = Color32::from_rgb(0xA8, 0x62, 0x00);
+
+// ------------------------------------------------------------------ sections
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
     Info,
     Files,
-    Archives,
-    Tools,
+    Shortcuts,
+    Run,
     Dialogs,
     Interface,
+    Requirements,
     Components,
     Tasks,
-    Shortcuts,
+    Archives,
     Registry,
-    Run,
-    Requirements,
     Uninstall,
-    Compression,
+    Tools,
+    Output,
     Build,
 }
 
-const SECTIONS: &[(Section, &str, &str)] = &[
-    (Section::Info, "ℹ", "Информация"),
-    (Section::Files, "🗀", "Файлы"),
-    (Section::Archives, "📦", "Внешние архивы"),
-    (Section::Tools, "🔧", "Инструменты"),
-    (Section::Dialogs, "☰", "Диалоги"),
-    (Section::Interface, "🎨", "Интерфейс"),
-    (Section::Components, "☑", "Компоненты"),
-    (Section::Tasks, "✔", "Задачи"),
-    (Section::Shortcuts, "🔗", "Ярлыки"),
-    (Section::Registry, "🗝", "Реестр"),
-    (Section::Run, "▶", "Запуск программ"),
-    (Section::Requirements, "⚙", "Требования"),
-    (Section::Uninstall, "🗑", "Деинсталляция"),
-    (Section::Compression, "💾", "Сжатие и вывод"),
-    (Section::Build, "🔨", "Сборка"),
+const GROUPS: &[(&str, &[(Section, &str, &str)])] = &[
+    (
+        "ПРОГРАММА",
+        &[
+            (Section::Info, "ℹ", "Информация"),
+            (Section::Files, "🗀", "Файлы"),
+            (Section::Shortcuts, "🔗", "Ярлыки"),
+            (Section::Run, "▶", "Запуск программ"),
+        ],
+    ),
+    (
+        "УСТАНОВЩИК",
+        &[
+            (Section::Dialogs, "☰", "Диалоги"),
+            (Section::Interface, "🎨", "Оформление"),
+            (Section::Requirements, "⚙", "Требования"),
+        ],
+    ),
+    (
+        "ДОПОЛНИТЕЛЬНО",
+        &[
+            (Section::Components, "☑", "Компоненты"),
+            (Section::Tasks, "✔", "Флажки"),
+            (Section::Archives, "📦", "Внешние архивы"),
+            (Section::Registry, "🗝", "Реестр"),
+            (Section::Uninstall, "🗑", "Удаление"),
+            (Section::Tools, "🔧", "Инструменты"),
+        ],
+    ),
+    ("СБОРКА", &[(Section::Output, "💾", "Сжатие и вывод"), (Section::Build, "🔨", "Сборка")]),
 ];
+
+fn section_header(s: Section) -> (&'static str, &'static str) {
+    match s {
+        Section::Info => ("Информация о программе", "Основные сведения и самые частые настройки установки."),
+        Section::Files => ("Файлы", "Что упаковать в установщик и куда это скопировать на компьютере пользователя."),
+        Section::Shortcuts => ("Ярлыки", "Ярлыки в меню «Пуск», на рабочем столе и в других местах."),
+        Section::Run => ("Запуск программ", "Программы, запускаемые во время установки или по флажку в конце."),
+        Section::Dialogs => ("Диалоги", "Какие страницы показывает мастер установки и что на них написано."),
+        Section::Interface => ("Оформление", "Картинки, иконка, шрифт и языки установщика."),
+        Section::Requirements => ("Требования", "Версия Windows, разрядность, права администратора, память."),
+        Section::Components => ("Компоненты", "Части программы, которые пользователь может выбрать (например, озвучка)."),
+        Section::Tasks => ("Флажки", "Свои флажки на странице «Дополнительные задачи». Их можно привязать к файлам, реестру, запуску."),
+        Section::Archives => ("Внешние архивы", "Архивы рядом с setup.exe, которые распаковываются при установке."),
+        Section::Registry => ("Реестр", "Записи реестра, создаваемые при установке."),
+        Section::Uninstall => ("Удаление", "Деинсталлятор, запись в «Программы и компоненты», очистка файлов."),
+        Section::Tools => ("Инструменты", "Вспомогательные файлы, нужные только во время установки (unarc.dll, precomp.exe…)."),
+        Section::Output => ("Сжатие и вывод", "Метод сжатия и куда положить готовый setup.exe."),
+        Section::Build => ("Сборка", "F9 — собрать. После сборки установщик проверяется автоматически."),
+    }
+}
+
+/// Install-time folders with human names.
+const FOLDERS: &[(&str, &str)] = &[
+    ("{app}", "Папка программы"),
+    ("{pf}", "Program Files"),
+    ("{commonappdata}", "ProgramData (для всех)"),
+    ("{userappdata}", "AppData\\Roaming"),
+    ("{localappdata}", "AppData\\Local"),
+    ("{userdocs}", "Документы"),
+    ("{autodesktop}", "Рабочий стол"),
+    ("{sys}", "Windows\\System32"),
+    ("{win}", "Папка Windows"),
+    ("{src}", "Папка с setup.exe"),
+    ("{tmp}", "Временная папка"),
+];
+
+const INSTALL_ROOTS: &[(&str, &str)] = &[
+    ("{pf}", "Program Files"),
+    ("{sd}", "Системный диск (C:)"),
+    ("{localappdata}", "AppData\\Local"),
+    ("{userappdata}", "AppData\\Roaming"),
+    ("{commonappdata}", "ProgramData"),
+    ("{userdocs}", "Документы"),
+];
+
+const LOCATIONS: &[(&str, &str)] = &[
+    ("{group}", "Меню «Пуск», папка программы"),
+    ("{autoprograms}", "Меню «Пуск», Программы"),
+    ("{autodesktop}", "Рабочий стол"),
+    ("{autostartup}", "Автозагрузка"),
+    ("{app}", "Папка программы"),
+    ("{quicklaunch}", "Панель быстрого запуска"),
+];
+
+fn location_icon(loc: &str) -> &'static str {
+    match loc {
+        "{group}" | "{autoprograms}" | "{userprograms}" | "{commonprograms}" => "☰",
+        l if is_desktop(l) => "🖵",
+        "{autostartup}" | "{userstartup}" | "{commonstartup}" => "⏻",
+        _ => "🗀",
+    }
+}
+
+// ------------------------------------------------------------------ state
 
 #[derive(Default)]
 struct BuildState {
@@ -70,14 +171,14 @@ struct App {
 
 pub fn run(project: Option<PathBuf>) -> Result<(), String> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1180.0, 760.0]).with_min_inner_size([900.0, 560.0]).with_title("Setup Maker"),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1220.0, 800.0]).with_min_inner_size([940.0, 600.0]).with_title("Setup Maker"),
         ..Default::default()
     };
     eframe::run_native(
         "Setup Maker",
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::light());
+            apply_theme(&cc.egui_ctx);
             let mut app = App::new();
             if let Some(p) = project {
                 app.open(&p);
@@ -88,14 +189,66 @@ pub fn run(project: Option<PathBuf>) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+fn apply_theme(ctx: &egui::Context) {
+    let mut v = egui::Visuals::light();
+    v.panel_fill = BG;
+    v.window_fill = CARD;
+    v.extreme_bg_color = Color32::WHITE;
+    v.faint_bg_color = HOVER;
+    v.window_rounding = Rounding::same(8.0);
+    v.menu_rounding = Rounding::same(6.0);
+    v.window_stroke = Stroke::new(1.0_f32, BORDER);
+    v.selection.bg_fill = ACCENT_SOFT;
+    v.selection.stroke = Stroke::new(1.0_f32, ACCENT);
+    v.hyperlink_color = ACCENT;
+    let r = Rounding::same(5.0);
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
+    v.widgets.noninteractive.rounding = r;
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(0xEC, 0xEF, 0xF4);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(0xE4, 0xE8, 0xEF);
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
+    v.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    v.widgets.inactive.rounding = r;
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(0xDF, 0xE6, 0xF2);
+    v.widgets.hovered.bg_fill = Color32::from_rgb(0xDF, 0xE6, 0xF2);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+    v.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    v.widgets.hovered.rounding = r;
+    v.widgets.active.weak_bg_fill = ACCENT_SOFT;
+    v.widgets.active.bg_fill = ACCENT;
+    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+    v.widgets.active.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    v.widgets.active.rounding = r;
+    v.widgets.open = v.widgets.active;
+    ctx.set_visuals(v);
+    ctx.style_mut(|s| {
+        use egui::TextStyle::*;
+        s.text_styles.insert(Body, FontId::proportional(14.0));
+        s.text_styles.insert(Button, FontId::proportional(14.0));
+        s.text_styles.insert(Small, FontId::proportional(12.0));
+        s.text_styles.insert(Heading, FontId::proportional(22.0));
+        s.text_styles.insert(Monospace, FontId::monospace(13.0));
+        s.spacing.item_spacing = vec2(8.0, 7.0);
+        s.spacing.button_padding = vec2(10.0, 4.0);
+        s.spacing.interact_size.y = 26.0;
+        s.spacing.combo_width = 240.0;
+    });
+}
+
 fn ser(p: &Project) -> String {
     toml::to_string(p).unwrap_or_default()
 }
 
+fn new_project() -> Project {
+    let mut p = Project::template("Моя программа", "MyProgram.exe", "");
+    p.app.app_id = compile::new_guid();
+    p
+}
+
 impl App {
     fn new() -> App {
-        let mut p = Project::template("My Program", "MyProgram.exe", "");
-        p.app.app_id = compile::new_guid();
+        let p = new_project();
         let saved = ser(&p);
         App {
             project: p,
@@ -129,7 +282,7 @@ impl App {
         {
             let mut s = st.lock().unwrap();
             *s = BuildState { running: true, ..Default::default() };
-            s.log.push(format!("Импорт {} → {}", p.display(), dir.display()));
+            s.log.push(format!("Импорт {} » {}", p.display(), dir.display()));
         }
         self.section = Section::Build;
         self.status = "Импорт установщика…".into();
@@ -171,22 +324,12 @@ impl App {
             self.import_exe(p);
             return;
         }
-        let is_iss = p.extension().map(|e| e.eq_ignore_ascii_case("iss")).unwrap_or(false);
-        let r = if is_iss {
-            iss::import(p, &Default::default()).map(|i| {
-                for w in &i.warnings {
-                    self.build.lock().unwrap().log.push(format!("Импорт: {}", w));
-                }
-                i.project
-            })
-        } else {
-            project_io::load(p)
-        };
-        match r {
-            Ok(proj) => {
+        match project_io::load(p) {
+            Ok(mut proj) => {
+                proj.simplify_shortcut_tasks();
                 self.project = proj;
-                self.path = if is_iss { Some(p.with_extension("smp")) } else { Some(p.to_path_buf()) };
-                self.saved = if is_iss { String::new() } else { ser(&self.project) };
+                self.path = Some(p.to_path_buf());
+                self.saved = ser(&self.project);
                 self.sel = [None; 12];
                 self.status = format!("Открыт: {}", p.display());
             }
@@ -221,18 +364,13 @@ impl App {
         if self.build.lock().unwrap().running {
             return;
         }
-        if self.path.is_none() || self.dirty() {
-            if !self.save(false) {
-                return;
-            }
+        if (self.path.is_none() || self.dirty()) && !self.save(false) {
+            return;
         }
         let p = self.project.clone();
         let dir = self.base_dir();
         let st = self.build.clone();
-        {
-            let mut s = st.lock().unwrap();
-            *s = BuildState { running: true, ..Default::default() };
-        }
+        *st.lock().unwrap() = BuildState { running: true, ..Default::default() };
         self.cancel.store(false, std::sync::atomic::Ordering::SeqCst);
         self.section = Section::Build;
         let (s1, s2) = (st.clone(), st.clone());
@@ -260,43 +398,195 @@ impl App {
         });
     }
 
-    /// Make a picked path relative to the project folder when possible.
-    fn rel(&self, p: &Path) -> String {
-        let base = self.base_dir();
-        match p.strip_prefix(&base) {
-            Ok(r) => r.to_string_lossy().replace('/', "\\"),
-            Err(_) => p.to_string_lossy().to_string(),
+    fn count(&self, s: Section) -> usize {
+        let p = &self.project;
+        match s {
+            Section::Files => p.files.len(),
+            Section::Shortcuts => p.shortcuts.len(),
+            Section::Run => p.run.len() + p.uninstall_run.len(),
+            Section::Components => p.components.len(),
+            Section::Tasks => p.tasks.len(),
+            Section::Archives => p.archives.len(),
+            Section::Registry => p.registry.len(),
+            Section::Tools => p.tools.len(),
+            _ => 0,
         }
     }
+}
 
-    fn pick_file(&self, filters: &[(&str, &[&str])]) -> Option<String> {
-        let mut d = rfd::FileDialog::new().set_directory(self.base_dir());
-        for (n, e) in filters {
-            d = d.add_filter(*n, e);
+// ------------------------------------------------------------------ helpers
+
+/// Make a picked path relative to the project folder when possible.
+fn rel(base: &Path, p: &Path) -> String {
+    match p.strip_prefix(base) {
+        Ok(r) => r.to_string_lossy().replace('/', "\\"),
+        Err(_) => p.to_string_lossy().to_string(),
+    }
+}
+
+fn pick_file(base: &Path, filters: &[(&str, &[&str])]) -> Option<String> {
+    let mut d = rfd::FileDialog::new().set_directory(base);
+    for (n, e) in filters {
+        d = d.add_filter(*n, e);
+    }
+    d.pick_file().map(|p| rel(base, &p))
+}
+
+fn pick_folder(base: &Path) -> Option<String> {
+    rfd::FileDialog::new().set_directory(base).pick_folder().map(|p| rel(base, &p))
+}
+
+/// Turns `{app}\x`, `{cm:LaunchProgram,{#AppName}}` etc. into readable text.
+struct Pretty {
+    defs: BTreeMap<String, String>,
+    msgs: BTreeMap<String, String>,
+}
+
+impl Pretty {
+    fn new(p: &Project) -> Pretty {
+        let mut defs = p.defines.clone();
+        defs.entry("AppName".into()).or_insert_with(|| p.app.name.clone());
+        let mut msgs = BTreeMap::new();
+        for l in ["*", "ru"] {
+            if let Some(m) = p.messages.get(l) {
+                msgs.extend(m.clone());
+            }
         }
-        d.pick_file().map(|p| self.rel(&p))
+        Pretty { defs, msgs }
     }
 
-    fn pick_folder(&self) -> Option<String> {
-        rfd::FileDialog::new().set_directory(self.base_dir()).pick_folder().map(|p| self.rel(&p))
+    fn text(&self, s: &str) -> String {
+        let mut s = s.to_string();
+        for (k, v) in &self.defs {
+            s = s.replace(&format!("{{#{}}}", k), v);
+        }
+        for _ in 0..16 {
+            let Some(a) = s.find("{cm:") else { break };
+            let Some(len) = s[a..].find('}') else { break };
+            let inner = s[a + 4..a + len].to_string();
+            let mut parts = inner.split(',');
+            let key = parts.next().unwrap_or("").trim();
+            let args: Vec<&str> = parts.map(str::trim).collect();
+            let msg = self.msgs.get(key).map(|m| m.as_str()).or_else(|| smk_core::messages::builtin("ru", key));
+            let txt = match msg {
+                Some(m) => smk_core::messages::fmt(m, &args).replace('&', ""),
+                None => inner.clone(),
+            };
+            s.replace_range(a..a + len + 1, &txt);
+        }
+        s
+    }
+
+    fn path(&self, s: &str) -> String {
+        let t = self.text(s);
+        if t.eq_ignore_ascii_case("{uninstallexe}") {
+            return "Деинсталлятор".into();
+        }
+        let (loc, rest) = split_location(&t);
+        match FOLDERS.iter().chain(LOCATIONS).chain(INSTALL_ROOTS).find(|f| f.0.eq_ignore_ascii_case(loc)) {
+            Some(f) if rest.is_empty() => f.1.to_string(),
+            Some(f) => format!("{}\\{}", f.1, rest),
+            None => t,
+        }
+    }
+}
+
+/// Names and readable descriptions of components and checkboxes, for condition pickers.
+#[derive(Clone)]
+struct Choices {
+    comps: Vec<(String, String)>,
+    tasks: Vec<(String, String)>,
+}
+
+impl Choices {
+    fn new(p: &Project, pr: &Pretty) -> Choices {
+        Choices {
+            comps: p.components.iter().filter(|c| !c.name.is_empty()).map(|c| (c.name.clone(), pr.text(&c.description))).collect(),
+            tasks: p.tasks.iter().filter(|t| !t.name.is_empty()).map(|t| (t.name.clone(), pr.text(&t.description))).collect(),
+        }
+    }
+}
+
+fn join_root(root: &str, tail: &str) -> String {
+    let tail = tail.trim_start_matches('\\');
+    if tail.is_empty() {
+        root.to_string()
+    } else {
+        format!("{}\\{}", root, tail)
     }
 }
 
 // ------------------------------------------------------------------ widgets
 
-fn text(ui: &mut Ui, label: &str, v: &mut String, hint: &str) {
-    ui.label(label);
-    ui.add(egui::TextEdit::singleline(v).hint_text(hint).desired_width(f32::INFINITY));
+/// Width of a value field in forms (fixed, so cards never overflow).
+fn field_w(ui: &Ui) -> f32 {
+    let grid_w = ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::new("smk_field_w")));
+    ui.available_width().min(grid_w.unwrap_or(f32::INFINITY)).clamp(160.0, 560.0)
+}
+
+fn card(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    egui::Frame::none()
+        .fill(CARD)
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .rounding(Rounding::same(8.0))
+        .inner_margin(Margin::symmetric(16.0, 14.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if !title.is_empty() {
+                ui.label(RichText::new(title).size(15.5).strong().color(TEXT));
+                ui.add_space(4.0);
+            }
+            add(ui);
+        });
+    ui.add_space(12.0);
+}
+
+fn hint(ui: &mut Ui, t: &str) {
+    ui.label(RichText::new(t).size(12.5).color(MUTED));
+}
+
+fn grid(ui: &mut Ui, id: &str, f: impl FnOnce(&mut Ui)) {
+    // Grid cells don't limit their width, so value fields get it from here.
+    let w = ui.available_width() - 190.0 - 16.0 - 4.0;
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("smk_field_w"), w));
+    egui::Grid::new(id).num_columns(2).spacing([16.0, 8.0]).min_col_width(190.0).show(ui, f);
+}
+
+fn label(ui: &mut Ui, t: &str) {
+    ui.label(RichText::new(t).color(MUTED));
+}
+
+fn text(ui: &mut Ui, l: &str, v: &mut String, hint: &str) -> bool {
+    label(ui, l);
+    let r = ui.add(egui::TextEdit::singleline(v).hint_text(hint).desired_width(field_w(ui))).changed();
+    ui.end_row();
+    r
+}
+
+/// Text field that shows standard translated texts (`{cm:...}`) readably.
+fn loc_text(ui: &mut Ui, l: &str, v: &mut String, hint_text: &str, pr: &Pretty) {
+    label(ui, l);
+    if v.contains("{cm:") {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(pr.text(v)).color(TEXT));
+            hint(ui, "(на языке установщика)");
+            if ui.small_button("Изменить").clicked() {
+                *v = pr.text(v);
+            }
+        });
+    } else {
+        ui.add(egui::TextEdit::singleline(v).hint_text(hint_text).desired_width(field_w(ui)));
+    }
     ui.end_row();
 }
 
-fn path_row(app: &App, ui: &mut Ui, label: &str, v: &mut String, filters: &[(&str, &[&str])], folder: bool) {
-    ui.label(label);
+fn path_row(base: &Path, ui: &mut Ui, l: &str, v: &mut String, filters: &[(&str, &[&str])], folder: bool) {
+    label(ui, l);
     ui.horizontal(|ui| {
-        let w = ui.available_width() - 90.0;
-        ui.add(egui::TextEdit::singleline(v).desired_width(w.max(100.0)));
+        let w = field_w(ui) - 90.0;
+        ui.add(egui::TextEdit::singleline(v).desired_width(w.max(120.0)));
         if ui.button("Обзор…").clicked() {
-            let r = if folder { app.pick_folder() } else { app.pick_file(filters) };
+            let r = if folder { pick_folder(base) } else { pick_file(base, filters) };
             if let Some(p) = r {
                 *v = p;
             }
@@ -305,39 +595,151 @@ fn path_row(app: &App, ui: &mut Ui, label: &str, v: &mut String, filters: &[(&st
     ui.end_row();
 }
 
-fn check(ui: &mut Ui, label: &str, v: &mut bool) {
+fn check(ui: &mut Ui, l: &str, v: &mut bool) -> bool {
     ui.label("");
-    ui.checkbox(v, label);
+    let r = ui.checkbox(v, l).changed();
+    ui.end_row();
+    r
+}
+
+fn combo(ui: &mut Ui, l: &str, id: &str, v: &mut String, opts: &[(&str, &str)]) {
+    label(ui, l);
+    combo_box(ui, id, v, opts, 300.0);
     ui.end_row();
 }
 
-fn combo(ui: &mut Ui, label: &str, id: &str, v: &mut String, opts: &[(&str, &str)]) {
-    ui.label(label);
+fn combo_box(ui: &mut Ui, id: &str, v: &mut String, opts: &[(&str, &str)], w: f32) -> bool {
+    let before = v.clone();
     let cur = opts.iter().find(|o| o.0 == v.as_str()).map(|o| o.1).unwrap_or(v.as_str()).to_string();
-    egui::ComboBox::from_id_salt(id).selected_text(cur).width(260.0).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id).selected_text(cur).width(w).show_ui(ui, |ui| {
         for (k, n) in opts {
             ui.selectable_value(v, k.to_string(), *n);
         }
     });
-    ui.end_row();
+    *v != before
 }
 
-fn conditions(ui: &mut Ui, c: &mut Conditions) {
-    text(ui, "Компоненты:", &mut c.components, "напр. voice\\rus or voice\\eng");
-    text(ui, "Задачи:", &mut c.tasks, "напр. desktopicon");
-    text(ui, "Проверка (Check):", &mut c.check, "Is64BitInstallMode, not IsWin64, FileExists('{app}\\x.exe')");
+/// Combo with known folders + editable rest of the path.
+fn folder_field(ui: &mut Ui, id: &str, v: &mut String, roots: &[(&str, &str)], tail_hint: &str) {
+    let total = field_w(ui);
+    ui.horizontal(|ui| {
+        root_combo(ui, id, v, roots);
+        let (loc, tail) = split_location(v);
+        if roots.iter().any(|r| r.0.eq_ignore_ascii_case(loc)) {
+            let loc = loc.to_string();
+            let mut t = tail.to_string();
+            ui.label(RichText::new("\\").color(MUTED));
+            if ui.add(egui::TextEdit::singleline(&mut t).hint_text(tail_hint).desired_width((total - 262.0).max(120.0))).changed() {
+                *v = join_root(&loc, &t);
+            }
+        } else {
+            ui.add(egui::TextEdit::singleline(v).hint_text("C:\\Путь").desired_width((total - 240.0).max(120.0)));
+        }
+    });
 }
 
-fn grid(ui: &mut Ui, id: &str, f: impl FnOnce(&mut Ui)) {
-    egui::Grid::new(id).num_columns(2).spacing([12.0, 6.0]).min_col_width(170.0).show(ui, f);
-}
-
-fn heading(ui: &mut Ui, t: &str, sub: &str) {
-    ui.label(RichText::new(t).size(20.0).strong());
-    if !sub.is_empty() {
-        ui.label(RichText::new(sub).color(Color32::from_gray(90)));
+fn root_combo(ui: &mut Ui, id: &str, v: &mut String, roots: &[(&str, &str)]) {
+    let (loc, tail) = split_location(v);
+    let cur = roots.iter().position(|r| r.0.eq_ignore_ascii_case(loc));
+    let tail = tail.to_string();
+    let mut sel = cur;
+    egui::ComboBox::from_id_salt(id).width(230.0).selected_text(cur.map(|i| roots[i].1).unwrap_or("Другой путь")).show_ui(ui, |ui| {
+        for (i, r) in roots.iter().enumerate() {
+            ui.selectable_value(&mut sel, Some(i), r.1);
+        }
+        ui.selectable_value(&mut sel, None, "Другой путь…");
+    });
+    if sel != cur {
+        let tail = if cur.is_some() { tail } else { String::new() };
+        *v = match sel {
+            Some(i) => join_root(roots[i].0, &tail),
+            None => join_root("C:", &tail),
+        };
     }
-    ui.separator();
+}
+
+/// `a or b or c` -> [a, b, c]; None for anything more complex.
+fn or_list(e: &str) -> Option<Vec<String>> {
+    if e.trim().is_empty() {
+        return Some(vec![]);
+    }
+    let parts: Vec<String> = e.split(" or ").map(|s| s.trim().to_string()).collect();
+    let simple = parts.iter().all(|p| !p.is_empty() && !p.contains(|c: char| c.is_whitespace() || "()!&|".contains(c)) && !p.eq_ignore_ascii_case("not"));
+    simple.then_some(parts)
+}
+
+/// Checkboxes over `items`, stored as an `a or b` expression.
+fn multi_pick(ui: &mut Ui, expr: &mut String, items: &[(String, String)], empty: &str) {
+    match or_list(expr) {
+        Some(mut sel) => {
+            ui.horizontal_wrapped(|ui| {
+                if items.is_empty() {
+                    hint(ui, empty);
+                }
+                let mut changed = false;
+                for (n, d) in items {
+                    let pos = sel.iter().position(|s| s.eq_ignore_ascii_case(n));
+                    let mut on = pos.is_some();
+                    let d = if d.trim().is_empty() { n.as_str() } else { d.as_str() };
+                    if ui.checkbox(&mut on, d).changed() {
+                        changed = true;
+                        match pos {
+                            Some(i) => {
+                                sel.remove(i);
+                            }
+                            None => sel.push(n.clone()),
+                        }
+                    }
+                }
+                if changed {
+                    *expr = sel.join(" or ");
+                }
+            });
+        }
+        None => {
+            ui.add(egui::TextEdit::singleline(expr).desired_width(field_w(ui)));
+        }
+    }
+}
+
+fn conditions(ui: &mut Ui, c: &mut Conditions, ch: &Choices) {
+    if !ch.comps.is_empty() || !c.components.is_empty() {
+        label(ui, "Только для компонентов:");
+        multi_pick(ui, &mut c.components, &ch.comps, "");
+        ui.end_row();
+    }
+    if !ch.tasks.is_empty() || !c.tasks.is_empty() {
+        label(ui, "Только если отмечен флажок:");
+        multi_pick(ui, &mut c.tasks, &ch.tasks, "");
+        ui.end_row();
+    }
+    if !c.check.is_empty() {
+        text(ui, "Доп. условие:", &mut c.check, "");
+    }
+}
+
+fn advanced_check(ui: &mut Ui, c: &mut Conditions) {
+    if c.check.is_empty() {
+        ui.collapsing("Условие для опытных", |ui| {
+            hint(ui, "Выражение: IsWin64, not Is64BitInstallMode, FileExists('{app}\\x.exe'), RegKeyExists('HKLM\\…')");
+            ui.add(egui::TextEdit::singleline(&mut c.check).desired_width(field_w(ui)));
+        });
+    }
+}
+
+/// Item row in a list (custom-painted, full width).
+fn list_row(ui: &mut Ui, selected: bool, text: &str) -> egui::Response {
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+    let p = ui.painter();
+    if selected {
+        p.rect_filled(rect, 5.0, ACCENT_SOFT);
+        p.rect_filled(egui::Rect::from_min_size(rect.min, vec2(3.0, rect.height())), 1.5, ACCENT);
+    } else if resp.hovered() {
+        p.rect_filled(rect, 5.0, HOVER);
+    }
+    p.with_clip_rect(rect.shrink2(vec2(4.0, 0.0))).text(rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, text, FontId::proportional(14.0), TEXT);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Master/detail list editor: list on the left, form on the right.
@@ -346,6 +748,7 @@ fn list_editor<T: Default + Clone>(
     id: &str,
     items: &mut Vec<T>,
     sel: &mut Option<usize>,
+    empty: &str,
     title: impl Fn(&T) -> String,
     mut form: impl FnMut(&mut Ui, &mut T),
 ) {
@@ -364,45 +767,98 @@ fn list_editor<T: Default + Clone>(
             items.remove(sel.unwrap());
             *sel = None;
         }
-        if ui.add_enabled(has && sel.unwrap() > 0, egui::Button::new("⬆")).clicked() {
+        if ui.add_enabled(has && sel.unwrap() > 0, egui::Button::new("⬆")).on_hover_text("Выше").clicked() {
             let i = sel.unwrap();
             items.swap(i, i - 1);
             *sel = Some(i - 1);
         }
-        if ui.add_enabled(has && sel.unwrap() + 1 < items.len(), egui::Button::new("⬇")).clicked() {
+        if ui.add_enabled(has && sel.unwrap() + 1 < items.len(), egui::Button::new("⬇")).on_hover_text("Ниже").clicked() {
             let i = sel.unwrap();
             items.swap(i, i + 1);
             *sel = Some(i + 1);
         }
-        ui.label(format!("всего: {}", items.len()));
     });
-    ui.add_space(4.0);
-    let h = ui.available_height();
+    ui.add_space(6.0);
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(330.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                egui::ScrollArea::vertical().id_salt(format!("{}_list", id)).max_height(h - 20.0).auto_shrink([false, false]).show(ui, |ui| {
-                    ui.set_width(310.0);
+            egui::Frame::none().fill(CARD).stroke(Stroke::new(1.0_f32, BORDER)).rounding(Rounding::same(8.0)).inner_margin(Margin::same(6.0)).show(ui, |ui| {
+                ui.set_width(316.0);
+                egui::ScrollArea::vertical().id_salt(format!("{}_list", id)).max_height(420.0).auto_shrink([false, true]).show(ui, |ui| {
+                    if items.is_empty() {
+                        ui.add_space(8.0);
+                        ui.vertical_centered(|ui| hint(ui, empty));
+                        ui.add_space(8.0);
+                    }
+                    ui.spacing_mut().item_spacing.y = 2.0;
                     for (i, it) in items.iter().enumerate() {
                         let t = title(it);
-                        let t = if t.trim().is_empty() { "(пусто)".to_string() } else { t };
-                        if ui.selectable_label(*sel == Some(i), t).clicked() {
+                        let t = if t.trim().is_empty() { "(без названия)".to_string() } else { t };
+                        if list_row(ui, *sel == Some(i), &t).clicked() {
                             *sel = Some(i);
                         }
                     }
                 });
             });
         });
-        ui.vertical(|ui| {
-            egui::ScrollArea::vertical().id_salt(format!("{}_form", id)).max_height(h - 10.0).show(ui, |ui| match sel {
-                Some(i) if *i < items.len() => form(ui, &mut items[*i]),
-                _ => {
-                    ui.label(RichText::new("Выберите элемент слева или нажмите «Добавить».").color(Color32::GRAY));
-                }
-            });
+        ui.add_space(4.0);
+        ui.vertical(|ui| match sel {
+            Some(i) if *i < items.len() => {
+                egui::Frame::none().fill(CARD).stroke(Stroke::new(1.0_f32, BORDER)).rounding(Rounding::same(8.0)).inner_margin(Margin::symmetric(16.0, 14.0)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    form(ui, &mut items[*i]);
+                });
+            }
+            _ => {
+                ui.add_space(30.0);
+                ui.vertical_centered(|ui| hint(ui, "Выберите элемент в списке или нажмите «Добавить»."));
+            }
         });
     });
+}
+
+/// Big selectable tile with a title and a description line.
+fn tile(ui: &mut Ui, sel: bool, title: &str, desc: &str) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(250.0, 56.0), Sense::click());
+    let fill = if sel {
+        ACCENT_SOFT
+    } else if resp.hovered() {
+        HOVER
+    } else {
+        CARD
+    };
+    let p = ui.painter();
+    p.rect(rect, 8.0, fill, Stroke::new(if sel { 1.5_f32 } else { 1.0 }, if sel { ACCENT } else { BORDER }));
+    p.text(rect.left_top() + vec2(14.0, 10.0), Align2::LEFT_TOP, title, FontId::proportional(15.0), if sel { ACCENT } else { TEXT });
+    p.text(rect.left_top() + vec2(14.0, 32.0), Align2::LEFT_TOP, desc, FontId::proportional(12.0), MUTED);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+}
+
+fn unique_name(prefix: &str, taken: &[String]) -> String {
+    let mut n = 1;
+    loop {
+        let s = format!("{}{}", prefix, n);
+        if !taken.iter().any(|t| t.eq_ignore_ascii_case(&s)) {
+            return s;
+        }
+        n += 1;
+    }
+}
+
+fn mb_field(ui: &mut Ui, bytes: &mut u64) {
+    let mut mb = *bytes / 1_048_576;
+    if ui.add(egui::DragValue::new(&mut mb).range(0..=10_000_000).suffix(" МБ")).changed() {
+        *bytes = mb * 1_048_576;
+    }
+}
+
+fn hex_to_rgb(s: &str) -> Option<[u8; 3]> {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() != 6 {
+        return None;
+    }
+    let v = u32::from_str_radix(h, 16).ok()?;
+    Some([(v >> 16) as u8, (v >> 8) as u8, v as u8])
 }
 
 // ------------------------------------------------------------------ app
@@ -420,359 +876,740 @@ impl eframe::App for App {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save(false);
         }
+        let dirty = self.dirty();
         let title = format!(
             "Setup Maker {} — {}{}",
             smk_core::VERSION,
             self.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "новый проект".into()),
-            if self.dirty() { " *" } else { "" }
+            if dirty { " *" } else { "" }
         );
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
-        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("🗋 Новый").clicked() {
-                    let mut p = Project::template("My Program", "MyProgram.exe", "");
-                    p.app.app_id = compile::new_guid();
-                    self.project = p;
-                    self.path = None;
-                    self.saved = String::new();
-                    self.sel = [None; 12];
-                }
-                if ui.button("🗁 Открыть").clicked() {
-                    if let Some(p) = rfd::FileDialog::new().add_filter("Проекты", &["smp", "iss"]).pick_file() {
-                        self.open(&p);
+        self.sidebar(ctx);
+        self.toolbar(ctx, dirty);
+        egui::TopBottomPanel::bottom("status")
+            .frame(egui::Frame::none().fill(CARD).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(Margin::symmetric(14.0, 5.0)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&self.status).size(12.5).color(MUTED));
+                    let s = self.build.lock().unwrap();
+                    if s.running {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add(egui::ProgressBar::new(s.progress).desired_width(220.0).show_percentage());
+                        });
+                        ctx.request_repaint_after(std::time::Duration::from_millis(150));
                     }
-                }
-                if ui.button("💾 Сохранить").clicked() {
-                    self.save(false);
-                }
-                if ui.button("Сохранить как…").clicked() {
-                    self.save(true);
-                }
-                if ui.button("🗁 Импорт .iss").clicked() {
-                    if let Some(p) = rfd::FileDialog::new().add_filter("Inno Setup", &["iss"]).pick_file() {
-                        self.open(&p);
-                    }
-                }
-                if ui.button("📦 Импорт setup.exe").on_hover_text("Разобрать готовый установщик Inno Setup 5.2.5–6.3 в проект (файлы, задачи, ярлыки, картинки, архивы ISDone)").clicked() {
-                    if let Some(p) = rfd::FileDialog::new().add_filter("Установщик Inno Setup", &["exe"]).pick_file() {
-                        self.import_exe(&p);
-                    }
-                }
-                ui.separator();
-                let running = self.build.lock().unwrap().running;
-                if ui.add_enabled(!running, egui::Button::new(RichText::new("🔨 Собрать (F9)").strong())).clicked() {
-                    self.start_build();
-                }
-            });
-        });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&self.status);
-                let s = self.build.lock().unwrap();
-                if s.running {
-                    ui.add(egui::ProgressBar::new(s.progress).desired_width(240.0).show_percentage());
-                    ctx.request_repaint_after(std::time::Duration::from_millis(150));
-                }
-            });
-        });
-        egui::SidePanel::left("sections").resizable(false).exact_width(200.0).show(ctx, |ui| {
-            ui.add_space(6.0);
-            for (s, icon, name) in SECTIONS {
-                let t = RichText::new(format!(" {}   {}", icon, name)).size(15.0);
-                let r = ui.allocate_ui_with_layout(egui::vec2(186.0, 28.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add_sized([186.0, 28.0], egui::SelectableLabel::new(self.section == *s, t))
                 });
-                if r.inner.clicked() {
-                    self.section = *s;
+            });
+        egui::CentralPanel::default().frame(egui::Frame::none().fill(BG).inner_margin(Margin { left: 24.0, right: 18.0, top: 18.0, bottom: 8.0 })).show(ctx, |ui| {
+            let (t, sub) = section_header(self.section);
+            ui.label(RichText::new(t).size(23.0).strong().color(TEXT));
+            ui.label(RichText::new(sub).color(MUTED));
+            ui.add_space(12.0);
+            egui::ScrollArea::vertical().id_salt("main").auto_shrink([false, false]).show(ui, |ui| {
+                ui.set_max_width(ui.available_width().min(1100.0));
+                match self.section {
+                    Section::Info => self.ui_info(ui),
+                    Section::Files => self.ui_files(ui),
+                    Section::Shortcuts => self.ui_shortcuts(ui),
+                    Section::Run => self.ui_run(ui),
+                    Section::Dialogs => self.ui_dialogs(ui),
+                    Section::Interface => self.ui_interface(ui),
+                    Section::Requirements => self.ui_requirements(ui),
+                    Section::Components => self.ui_components(ui),
+                    Section::Tasks => self.ui_tasks(ui),
+                    Section::Archives => self.ui_archives(ui),
+                    Section::Registry => self.ui_registry(ui),
+                    Section::Uninstall => self.ui_uninstall(ui),
+                    Section::Tools => self.ui_tools(ui),
+                    Section::Output => self.ui_output(ui),
+                    Section::Build => self.ui_build(ui, ctx),
                 }
-            }
-        });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().id_salt("main").auto_shrink([false, false]).show(ui, |ui| match self.section {
-                Section::Info => self.ui_info(ui),
-                Section::Files => self.ui_files(ui),
-                Section::Archives => self.ui_archives(ui),
-                Section::Tools => self.ui_tools(ui),
-                Section::Dialogs => self.ui_dialogs(ui),
-                Section::Interface => self.ui_interface(ui),
-                Section::Components => self.ui_components(ui),
-                Section::Tasks => self.ui_tasks(ui),
-                Section::Shortcuts => self.ui_shortcuts(ui),
-                Section::Registry => self.ui_registry(ui),
-                Section::Run => self.ui_run(ui),
-                Section::Requirements => self.ui_requirements(ui),
-                Section::Uninstall => self.ui_uninstall(ui),
-                Section::Compression => self.ui_compression(ui),
-                Section::Build => self.ui_build(ui, ctx),
+                ui.add_space(16.0);
             });
         });
     }
 }
 
 impl App {
-    fn ui_info(&mut self, ui: &mut Ui) {
-        heading(ui, "Информация о программе", "Отображается в мастере установки, в «Программы и компоненты» и в свойствах setup.exe");
-        let a = &mut self.project.app;
-        grid(ui, "info", |ui| {
-            text(ui, "Название:", &mut a.name, "My Program");
-            text(ui, "Версия:", &mut a.version, "1.0");
-            text(ui, "Тип версии:", &mut a.version_type, "stable / beta");
-            text(ui, "Издатель:", &mut a.publisher, "");
-            text(ui, "Главный exe (в {app}):", &mut a.exe, "MyProgram.exe");
-            text(ui, "Сайт:", &mut a.url, "https://");
-            text(ui, "Поддержка:", &mut a.support_url, "");
-            text(ui, "Обновления:", &mut a.updates_url, "");
-            text(ui, "Контакт:", &mut a.contact, "e-mail");
-            text(ui, "Комментарий:", &mut a.comments, "");
-            text(ui, "Copyright:", &mut a.copyright, "");
-            text(ui, "Название с версией:", &mut a.verb_name, "пусто = «Название Версия»");
-            ui.label("AppId (GUID):");
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut a.app_id).desired_width(330.0));
-                if ui.button("Сгенерировать").clicked() {
-                    a.app_id = compile::new_guid();
-                }
-            });
-            ui.end_row();
-        });
-        ui.add_space(8.0);
-        ui.collapsing("Ресурс версии setup.exe (необязательно)", |ui| {
-            let v = &mut self.project.app.version_info;
-            grid(ui, "vi", |ui| {
-                text(ui, "Версия файла:", &mut v.version, "1.0.0.0 (пусто = версия программы)");
-                text(ui, "Компания:", &mut v.company, "");
-                text(ui, "Copyright:", &mut v.copyright, "");
-                text(ui, "Продукт:", &mut v.product_name, "");
-                text(ui, "Версия продукта:", &mut v.product_version, "");
-                text(ui, "Описание:", &mut v.description, "");
-            });
-        });
-        ui.collapsing("Переменные {#Имя} (defines)", |ui| {
-            ui.label("Используются в любых полях как {#Имя}. Удобно для путей: {#InnoDir}\\MyApp\\files\\*");
-            let mut remove = None;
-            let mut rename: Option<(String, String)> = None;
-            let keys: Vec<String> = self.project.defines.keys().cloned().collect();
-            for k in keys {
+    fn sidebar(&mut self, ctx: &egui::Context) {
+        egui::SidePanel::left("nav")
+            .resizable(false)
+            .exact_width(222.0)
+            .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(Margin::symmetric(10.0, 14.0)))
+            .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    // Name is edited in a temp buffer and applied on Enter / focus loss,
-                    // because renaming a BTreeMap key every keystroke would reorder rows
-                    // and steal focus.
-                    let id = ui.make_persistent_id(("define_name", &k));
-                    let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| k.clone());
-                    let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(140.0));
-                    if resp.lost_focus() {
-                        ui.data_mut(|d| d.remove::<String>(id));
-                        let new = buf.trim().trim_start_matches("{#").trim_end_matches('}').trim().to_string();
-                        if !new.is_empty() && new != k && !self.project.defines.contains_key(&new) {
-                            rename = Some((k.clone(), new));
+                    ui.add_space(6.0);
+                    let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
+                    ui.painter().rect_filled(r, 8.0, ACCENT);
+                    ui.painter().text(r.center(), Align2::CENTER_CENTER, "📦", FontId::proportional(19.0), Color32::WHITE);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new("Setup Maker").size(16.0).strong().color(Color32::WHITE));
+                        ui.label(RichText::new(format!("версия {}", smk_core::VERSION)).size(11.5).color(SIDEBAR_MUTED));
+                    });
+                });
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical().id_salt("nav_scroll").show(ui, |ui| {
+                    for (g, items) in GROUPS {
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(8.0);
+                            ui.label(RichText::new(*g).size(11.0).strong().color(SIDEBAR_MUTED));
+                        });
+                        ui.add_space(2.0);
+                        for (s, icon, name) in items.iter() {
+                            if self.nav_item(ui, *s, icon, name).clicked() {
+                                self.section = *s;
+                            }
                         }
-                    } else if resp.has_focus() {
-                        ui.data_mut(|d| d.insert_temp(id, buf));
-                    }
-                    ui.label("=");
-                    if let Some(v) = self.project.defines.get_mut(&k) {
-                        ui.add(egui::TextEdit::singleline(v).desired_width(420.0));
-                    }
-                    if ui.button("✖").clicked() {
-                        remove = Some(k.clone());
                     }
                 });
-            }
-            if let Some(k) = remove {
-                self.project.defines.remove(&k);
-            }
-            if let Some((old, new)) = rename {
-                if let Some(v) = self.project.defines.remove(&old) {
-                    self.project.defines.insert(new, v);
-                }
-            }
-            if ui.button("➕ Переменная").clicked() {
-                let mut n = 1;
-                while self.project.defines.contains_key(&format!("Var{}", n)) {
-                    n += 1;
-                }
-                self.project.defines.insert(format!("Var{}", n), String::new());
-            }
-        });
+            });
     }
 
-    fn ui_files(&mut self, ui: &mut Ui) {
-        heading(ui, "Файлы", "Файлы и папки, упаковываемые внутрь установщика. Источник — файл, папка или маска (папка\\*). Назначение — с константами {app}, {sys}, {userappdata}...");
-        ui.horizontal(|ui| {
-            if ui.button("📄 Добавить файлы…").clicked() {
-                if let Some(fs) = rfd::FileDialog::new().set_directory(self.base_dir()).pick_files() {
-                    for f in fs {
-                        let src = self.rel(&f);
-                        self.project.files.push(FileItem { source: src, ..Default::default() });
+    fn nav_item(&self, ui: &mut Ui, s: Section, icon: &str, name: &str) -> egui::Response {
+        let sel = self.section == s;
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+        let p = ui.painter();
+        if sel {
+            p.rect_filled(rect, 6.0, ACCENT);
+        } else if resp.hovered() {
+            p.rect_filled(rect, 6.0, SIDEBAR_HOVER);
+        }
+        let col = if sel { Color32::WHITE } else { SIDEBAR_TEXT };
+        p.text(rect.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, icon, FontId::proportional(15.0), col);
+        p.text(rect.left_center() + vec2(40.0, 0.0), Align2::LEFT_CENTER, name, FontId::proportional(14.5), col);
+        let n = self.count(s);
+        if n > 0 {
+            let c = if sel { Color32::from_rgb(0xCF, 0xDE, 0xF7) } else { SIDEBAR_MUTED };
+            p.text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, n.to_string(), FontId::proportional(12.5), c);
+        }
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    }
+
+    fn toolbar(&mut self, ctx: &egui::Context, dirty: bool) {
+        egui::TopBottomPanel::top("toolbar")
+            .frame(egui::Frame::none().fill(CARD).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(Margin::symmetric(14.0, 8.0)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("🗋  Новый").clicked() {
+                        self.project = new_project();
+                        self.path = None;
+                        self.saved = String::new();
+                        self.sel = [None; 12];
+                        self.section = Section::Info;
+                        self.status = "Новый проект".into();
+                    }
+                    if ui.button("🗁  Открыть").clicked() {
+                        if let Some(p) = rfd::FileDialog::new().add_filter("Проект Setup Maker", &["smp"]).pick_file() {
+                            self.open(&p);
+                        }
+                    }
+                    let save = if dirty { "💾  Сохранить •" } else { "💾  Сохранить" };
+                    if ui.button(save).on_hover_text("Ctrl+S").clicked() {
+                        self.save(false);
+                    }
+                    if ui.button("Сохранить как…").clicked() {
+                        self.save(true);
+                    }
+                    ui.separator();
+                    if ui
+                        .button("📥  Импорт setup.exe")
+                        .on_hover_text("Разобрать готовый установщик Inno Setup 5.2.5–6.3 в проект: файлы, ярлыки, картинки, архивы")
+                        .clicked()
+                    {
+                        if let Some(p) = rfd::FileDialog::new().add_filter("Установщик", &["exe"]).pick_file() {
+                            self.import_exe(&p);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let running = self.build.lock().unwrap().running;
+                        let b = egui::Button::new(RichText::new("🔨  Собрать  F9").strong().color(Color32::WHITE))
+                            .fill(if running { MUTED } else { ACCENT })
+                            .rounding(Rounding::same(6.0))
+                            .min_size(vec2(140.0, 30.0));
+                        let r = ui.add_enabled(!running, b);
+                        if r.hovered() && !running {
+                            ui.painter().rect_stroke(r.rect, 6.0, Stroke::new(1.0_f32, ACCENT_HOVER));
+                        }
+                        if r.clicked() {
+                            self.start_build();
+                        }
+                    });
+                });
+            });
+    }
+
+    // ------------------------------------------------------------- Info
+
+    fn ui_info(&mut self, ui: &mut Ui) {
+        let base = self.base_dir();
+        card(ui, "Программа", |ui| {
+            let a = &mut self.project.app;
+            let old_name = a.name.clone();
+            let old_exe = a.exe.clone();
+            grid(ui, "info", |ui| {
+                text(ui, "Название:", &mut a.name, "Моя программа");
+                text(ui, "Версия:", &mut a.version, "1.0");
+                text(ui, "Издатель:", &mut a.publisher, "Название компании или автора");
+                text(ui, "Сайт:", &mut a.url, "https://");
+                label(ui, "Главный файл программы:");
+                ui.horizontal(|ui| {
+                    let w = field_w(ui) - 90.0;
+                    ui.add(egui::TextEdit::singleline(&mut a.exe).hint_text("MyProgram.exe (путь внутри папки программы)").desired_width(w.max(120.0)));
+                    if ui.button("Обзор…").clicked() {
+                        if let Some(p) = pick_file(&base, &[("Программы", &["exe"])]) {
+                            a.exe = p.rsplit('\\').next().unwrap_or(&p).to_string();
+                        }
+                    }
+                });
+                ui.end_row();
+                text(ui, "Copyright:", &mut a.copyright, "© 2026 …");
+            });
+            // keep {#AppName} in sync with the name
+            if a.name != old_name && self.project.defines.get("AppName").map(|v| v == &old_name).unwrap_or(true) {
+                self.project.defines.insert("AppName".into(), a.name.clone());
+            }
+            if a.exe != old_exe && !old_exe.is_empty() {
+                let (o, n) = (format!("{{app}}\\{}", old_exe), format!("{{app}}\\{}", a.exe));
+                for s in &mut self.project.shortcuts {
+                    if s.target.eq_ignore_ascii_case(&o) {
+                        s.target = n.clone();
+                    }
+                }
+                for r in &mut self.project.run {
+                    if r.filename.eq_ignore_ascii_case(&o) {
+                        r.filename = n.clone();
                     }
                 }
             }
-            if ui.button("🗀 Добавить папку…").clicked() {
-                if let Some(d) = self.pick_folder() {
+        });
+        card(ui, "Ярлыки и запуск", |ui| self.quick_options(ui));
+        card(ui, "Куда устанавливать", |ui| {
+            let s = &mut self.project.setup;
+            grid(ui, "quickdir", |ui| {
+                label(ui, "Папка установки:");
+                folder_field(ui, "qdir", &mut s.default_dir, INSTALL_ROOTS, "{#AppName}");
+                ui.end_row();
+                text(ui, "Папка в меню «Пуск»:", &mut s.default_group, "{#AppName}");
+            });
+            hint(ui, "{#AppName} подставляет название программы.");
+        });
+        ui.collapsing(RichText::new("Дополнительные сведения").color(MUTED), |ui| {
+            card(ui, "", |ui| {
+                let a = &mut self.project.app;
+                grid(ui, "info2", |ui| {
+                    text(ui, "Тип версии:", &mut a.version_type, "stable / beta");
+                    text(ui, "Поддержка:", &mut a.support_url, "https://");
+                    text(ui, "Обновления:", &mut a.updates_url, "https://");
+                    text(ui, "Контакт:", &mut a.contact, "e-mail");
+                    text(ui, "Комментарий:", &mut a.comments, "");
+                    text(ui, "Название с версией:", &mut a.verb_name, "пусто = «Название Версия»");
+                    label(ui, "Код программы (GUID):");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut a.app_id).desired_width(330.0));
+                        if ui.button("Новый").clicked() {
+                            a.app_id = compile::new_guid();
+                        }
+                    });
+                    ui.end_row();
+                });
+                hint(ui, "По этому коду установщик узнаёт уже установленную программу и ставит обновление поверх. Не меняйте его между версиями.");
+            });
+            card(ui, "Свойства setup.exe", |ui| {
+                let v = &mut self.project.app.version_info;
+                grid(ui, "vi", |ui| {
+                    text(ui, "Версия файла:", &mut v.version, "пусто = версия программы");
+                    text(ui, "Компания:", &mut v.company, "");
+                    text(ui, "Copyright:", &mut v.copyright, "");
+                    text(ui, "Продукт:", &mut v.product_name, "");
+                    text(ui, "Версия продукта:", &mut v.product_version, "");
+                    text(ui, "Описание:", &mut v.description, "");
+                });
+            });
+            card(ui, "Переменные", |ui| {
+                hint(ui, "Подставляются в любое поле как {#Имя}. Например, путь к исходникам: {#Src}\\bin");
+                self.defines_editor(ui);
+            });
+        });
+    }
+
+    fn quick_options(&mut self, ui: &mut Ui) {
+        let p = &mut self.project;
+        if p.app.exe.trim().is_empty() {
+            ui.label(RichText::new("Укажите главный файл программы — тогда можно будет создать ярлыки и запуск.").color(WARN));
+            return;
+        }
+        let exe = format!("{{app}}\\{}", p.app.exe);
+        let is_exe = |t: &str| t.eq_ignore_ascii_case(&exe);
+        let find = |p: &Project, f: &dyn Fn(&str) -> bool| p.shortcuts.iter().position(|s| f(split_location(&s.name).0) && is_exe(&s.target));
+
+        // Start menu
+        let start = find(p, &|l| l == "{group}");
+        let mut on = start.is_some();
+        if ui.checkbox(&mut on, "Ярлык в меню «Пуск»").changed() {
+            match start {
+                Some(i) => {
+                    p.shortcuts.remove(i);
+                }
+                None => p.shortcuts.insert(0, Shortcut { name: "{group}\\{#AppName}".into(), target: exe.clone(), ..Default::default() }),
+            }
+        }
+
+        // Desktop
+        let desk = find(p, &|l| is_desktop(l));
+        ui.horizontal(|ui| {
+            let mut on = desk.is_some();
+            if ui.checkbox(&mut on, "Ярлык на рабочем столе").changed() {
+                match desk {
+                    Some(i) => {
+                        p.shortcuts.remove(i);
+                    }
+                    None => p.shortcuts.push(Shortcut { name: "{autodesktop}\\{#AppName}".into(), target: exe.clone(), ask: "checked".into(), ..Default::default() }),
+                }
+            }
+            if let Some(i) = find(p, &|l| is_desktop(l)) {
+                let s = &mut p.shortcuts[i];
+                if s.when.tasks.is_empty() {
+                    ui.add_space(12.0);
+                    combo_box(ui, "desk_ask", &mut s.ask, &[("", "создавать всегда"), ("checked", "спросить (флажок отмечен)"), ("unchecked", "спросить (флажок снят)")], 230.0);
+                } else {
+                    hint(ui, "  (по условию — см. «Ярлыки»)");
+                }
+            }
+        });
+
+        // Uninstall shortcut
+        let un = p.shortcuts.iter().position(|s| s.target.eq_ignore_ascii_case("{uninstallexe}"));
+        let mut on = un.is_some();
+        if ui.checkbox(&mut on, "Ярлык «Удалить программу» в меню «Пуск»").changed() {
+            match un {
+                Some(i) => {
+                    p.shortcuts.remove(i);
+                }
+                None => p.shortcuts.push(Shortcut { name: "{group}\\{cm:UninstallProgram,{#AppName}}".into(), target: "{uninstallexe}".into(), ..Default::default() }),
+            }
+        }
+
+        // Launch after install
+        let run = p.run.iter().position(|r| r.postinstall && is_exe(&r.filename));
+        let mut on = run.is_some();
+        if ui.checkbox(&mut on, "Предложить запустить программу после установки").changed() {
+            match run {
+                Some(i) => {
+                    p.run.remove(i);
+                }
+                None => p.run.push(RunItem {
+                    filename: exe.clone(),
+                    description: "{cm:LaunchProgram,{#AppName}}".into(),
+                    postinstall: true,
+                    nowait: true,
+                    skip_if_silent: true,
+                    ..Default::default()
+                }),
+            }
+        }
+        hint(ui, "Остальные ярлыки и программы — в разделах «Ярлыки» и «Запуск программ».");
+    }
+
+    fn defines_editor(&mut self, ui: &mut Ui) {
+        let mut remove = None;
+        let mut rename: Option<(String, String)> = None;
+        let keys: Vec<String> = self.project.defines.keys().cloned().collect();
+        for k in keys {
+            ui.horizontal(|ui| {
+                // The name is edited in a temp buffer and applied on focus loss,
+                // renaming a BTreeMap key every keystroke would reorder rows.
+                let id = ui.make_persistent_id(("define_name", &k));
+                let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| k.clone());
+                let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(150.0));
+                if resp.lost_focus() {
+                    ui.data_mut(|d| d.remove::<String>(id));
+                    let new = buf.trim().trim_start_matches("{#").trim_end_matches('}').trim().to_string();
+                    if !new.is_empty() && new != k && !self.project.defines.contains_key(&new) {
+                        rename = Some((k.clone(), new));
+                    }
+                } else if resp.has_focus() {
+                    ui.data_mut(|d| d.insert_temp(id, buf));
+                }
+                ui.label("=");
+                if let Some(v) = self.project.defines.get_mut(&k) {
+                    ui.add(egui::TextEdit::singleline(v).desired_width(420.0));
+                }
+                if ui.button("✖").clicked() {
+                    remove = Some(k.clone());
+                }
+            });
+        }
+        if let Some(k) = remove {
+            self.project.defines.remove(&k);
+        }
+        if let Some((old, new)) = rename {
+            if let Some(v) = self.project.defines.remove(&old) {
+                self.project.defines.insert(new, v);
+            }
+        }
+        if ui.button("➕ Переменная").clicked() {
+            let keys: Vec<String> = self.project.defines.keys().cloned().collect();
+            self.project.defines.insert(unique_name("Var", &keys), String::new());
+        }
+    }
+
+    // ------------------------------------------------------------- Files
+
+    fn ui_files(&mut self, ui: &mut Ui) {
+        let base = self.base_dir();
+        ui.horizontal(|ui| {
+            if ui.button("📄  Добавить файлы…").clicked() {
+                if let Some(fs) = rfd::FileDialog::new().set_directory(&base).pick_files() {
+                    for f in fs {
+                        self.project.files.push(FileItem { source: rel(&base, &f), ..Default::default() });
+                    }
+                    self.sel[0] = Some(self.project.files.len() - 1);
+                }
+            }
+            if ui.button("🗀  Добавить папку…").clicked() {
+                if let Some(d) = pick_folder(&base) {
                     self.project.files.push(FileItem { source: format!("{}\\*", d), ..Default::default() });
+                    self.sel[0] = Some(self.project.files.len() - 1);
                 }
             }
         });
-        let app = &*self as *const App;
-        let files = &mut self.project.files;
-        list_editor(ui, "files", files, &mut self.sel[0], |f| format!("{}  →  {}", f.source, f.dest_dir), |ui, f| {
-            let app = unsafe { &*app };
-            grid(ui, "file", |ui| {
-                path_row(app, ui, "Источник:", &mut f.source, &[], false);
-                text(ui, "Папка назначения:", &mut f.dest_dir, "{app}");
-                text(ui, "Новое имя файла:", &mut f.dest_name, "только для одиночного файла");
-                check(ui, "Включая подпапки", &mut f.recursive);
-                check(ui, "Создавать пустые папки", &mut f.empty_dirs);
-                ui.label("Исключить:");
-                let mut ex = f.excludes.join(", ");
-                if ui.add(egui::TextEdit::singleline(&mut ex).hint_text("*.pdb, temp\\*").desired_width(f32::INFINITY)).changed() {
-                    f.excludes = ex.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-                }
-                ui.end_row();
-                combo(ui, "Перезапись:", "ow", &mut f.overwrite, &[("always", "всегда"), ("ifnewer", "если новее"), ("never", "только если нет")]);
-                check(ui, "Удалять при деинсталляции", &mut f.uninstall);
-                check(ui, "Пропустить, если источник не найден", &mut f.skip_if_missing);
-                check(ui, "Удалить после установки", &mut f.delete_after_install);
-                text(ui, "Атрибуты:", &mut f.attributes, "readonly hidden system");
-                conditions(ui, &mut f.when);
-            });
-        });
-    }
-
-    fn ui_archives(&mut self, ui: &mut Ui) {
-        heading(
+        ui.add_space(6.0);
+        let pr = Pretty::new(&self.project);
+        let ch = Choices::new(&self.project, &pr);
+        list_editor(
             ui,
-            "Внешние архивы",
-            "Архивы лежат рядом с setup.exe и распаковываются при установке. Достаточно указать имя: data1.arc, data*.7z, voice.smpk -> {app}\\sound",
+            "files",
+            &mut self.project.files,
+            &mut self.sel[0],
+            "Добавьте файлы или папку программы",
+            |f| format!("{}  »  {}", f.source, pr.path(&f.dest_dir)),
+            |ui, f| {
+                grid(ui, "file", |ui| {
+                    path_row(&base, ui, "Источник:", &mut f.source, &[], false);
+                    label(ui, "Куда установить:");
+                    folder_field(ui, "fdest", &mut f.dest_dir, FOLDERS, "подпапка");
+                    ui.end_row();
+                    text(ui, "Переименовать в:", &mut f.dest_name, "только для одного файла");
+                    check(ui, "Включая подпапки", &mut f.recursive);
+                    combo(ui, "Если файл уже есть:", "ow", &mut f.overwrite, &[("always", "заменить"), ("ifnewer", "заменить, если новее"), ("never", "оставить старый")]);
+                    check(ui, "Удалять при удалении программы", &mut f.uninstall);
+                    conditions(ui, &mut f.when, &ch);
+                });
+                ui.collapsing("Ещё", |ui| {
+                    grid(ui, "file2", |ui| {
+                        label(ui, "Исключить:");
+                        let mut ex = f.excludes.join(", ");
+                        if ui.add(egui::TextEdit::singleline(&mut ex).hint_text("*.pdb, temp\\*").desired_width(field_w(ui))).changed() {
+                            f.excludes = ex.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                        }
+                        ui.end_row();
+                        check(ui, "Создавать пустые папки", &mut f.empty_dirs);
+                        check(ui, "Пропустить, если источник не найден", &mut f.skip_if_missing);
+                        check(ui, "Удалить после установки", &mut f.delete_after_install);
+                        text(ui, "Атрибуты:", &mut f.attributes, "readonly hidden system");
+                    });
+                    advanced_check(ui, &mut f.when);
+                });
+            },
         );
-        ui.label(RichText::new("Форматы: .smpk (свой, LZMA2/Zstd/Brotli — можно создать прямо здесь), .7z, .zip, .tar(.gz/.xz/.zst/.br), .arc (FreeArc — нужен unarc.dll или unarc.exe в «Инструментах»)").small());
-        ui.collapsing("Быстрый ввод: одна строка — один архив", |ui| {
-            ui.add(egui::TextEdit::multiline(&mut self.archive_quick).hint_text("data1.arc\ndata2.arc\nvoice_rus.7z -> {app}\\sound").desired_rows(5).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
-            if ui.button("Добавить в список").clicked() {
-                for l in self.archive_quick.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                    self.project.archives.push(ArchiveItem::from_short(l));
+    }
+
+    // ------------------------------------------------------------- Shortcuts
+
+    fn ui_shortcuts(&mut self, ui: &mut Ui) {
+        let pr = Pretty::new(&self.project);
+        let ch = Choices::new(&self.project, &pr);
+        let exe = self.project.app.exe.clone();
+        let main = format!("{{app}}\\{}", exe);
+        list_editor(
+            ui,
+            "lnk",
+            &mut self.project.shortcuts,
+            &mut self.sel[6],
+            "Ярлыков нет",
+            |s| {
+                let (loc, leaf) = split_location(&s.name);
+                let place = LOCATIONS.iter().find(|l| l.0.eq_ignore_ascii_case(loc)).map(|l| l.1.split(", ").next().unwrap_or(l.1)).unwrap_or(loc);
+                let ask = if s.ask.is_empty() { "" } else { "  (спросить)" };
+                format!("{}  {}  —  {}{}", location_icon(loc), pr.text(leaf), place, ask)
+            },
+            |ui, s| {
+                if s.name.is_empty() {
+                    s.name = "{group}\\{#AppName}".into();
+                    if s.target.is_empty() {
+                        s.target = main.clone();
+                    }
                 }
-                self.archive_quick.clear();
-            }
-        });
-        let app = &*self as *const App;
-        list_editor(ui, "arcs", &mut self.project.archives, &mut self.sel[1], |a| format!("{}  →  {}", a.file, a.dest), |ui, a| {
-            let app = unsafe { &*app };
-            grid(ui, "arc", |ui| {
-                text(ui, "Имя файла (рядом с setup.exe):", &mut a.file, "data1.arc  или  data*.arc");
-                text(ui, "Распаковать в:", &mut a.dest, "{app}");
-                combo(ui, "Формат:", "afmt", &mut a.format, &[("", "авто по расширению"), ("smpk", "smpk"), ("7z", "7z"), ("zip", "zip"), ("tar", "tar"), ("tar.gz", "tar.gz"), ("tar.xz", "tar.xz"), ("tar.zst", "tar.zst"), ("tar.br", "tar.br"), ("arc", "FreeArc .arc")]);
-                text(ui, "Пароль:", &mut a.password, "");
-                check(ui, "Обязателен (ошибка, если не найден)", &mut a.required);
-                text(ui, "Запрос диска, если не найден:", &mut a.disk_prompt, "Пожалуйста, вставьте диск 2…");
-                check(ui, "Удалить архив после распаковки", &mut a.delete_after);
-                path_row(app, ui, "Упаковать из папки при сборке:", &mut a.pack_from, &[], true);
-                ui.label("");
-                ui.label(RichText::new("Если задана папка — сборщик сам создаст .smpk рядом с setup.exe теми же настройками сжатия").small());
+                grid(ui, "lnk", |ui| {
+                    label(ui, "Где создать:");
+                    root_combo(ui, "lnkloc", &mut s.name, LOCATIONS);
+                    ui.end_row();
+                    let (loc, leaf) = split_location(&s.name);
+                    if LOCATIONS.iter().any(|l| l.0.eq_ignore_ascii_case(loc)) {
+                        let loc = loc.to_string();
+                        let mut l = leaf.to_string();
+                        loc_text(ui, "Название ярлыка:", &mut l, "{#AppName}", &pr);
+                        if l != leaf {
+                            s.name = join_root(&loc, &l);
+                        }
+                    } else {
+                        text(ui, "Путь ярлыка:", &mut s.name, "");
+                    }
+                    label(ui, "На что указывает:");
+                    let mut kind = if !exe.is_empty() && s.target.eq_ignore_ascii_case(&main) {
+                        "main"
+                    } else if s.target.eq_ignore_ascii_case("{uninstallexe}") {
+                        "un"
+                    } else {
+                        "other"
+                    }
+                    .to_string();
+                    let opts: &[(&str, &str)] = &[("main", "главный файл программы"), ("un", "деинсталлятор"), ("other", "другой файл или ссылка…")];
+                    if combo_box(ui, "lnkkind", &mut kind, opts, 300.0) {
+                        s.target = match kind.as_str() {
+                            "main" => main.clone(),
+                            "un" => "{uninstallexe}".into(),
+                            _ => "{app}\\".into(),
+                        };
+                    }
+                    ui.end_row();
+                    if kind == "other" {
+                        label(ui, "Файл:");
+                        folder_field(ui, "lnktarget", &mut s.target, FOLDERS, "file.exe  или  https://…");
+                        ui.end_row();
+                    }
+                    combo(ui, "Создавать:", "lnkask", &mut s.ask, &[("", "всегда"), ("checked", "спросить (флажок отмечен)"), ("unchecked", "спросить (флажок снят)")]);
+                    text(ui, "Параметры запуска:", &mut s.params, "");
+                    conditions(ui, &mut s.when, &ch);
+                });
+                ui.collapsing("Ещё", |ui| {
+                    grid(ui, "lnk2", |ui| {
+                        text(ui, "Рабочая папка:", &mut s.workdir, "пусто = папка файла");
+                        text(ui, "Иконка:", &mut s.icon, "пусто = иконка файла");
+                        label(ui, "Номер иконки:");
+                        ui.add(egui::DragValue::new(&mut s.icon_index));
+                        ui.end_row();
+                        text(ui, "Подсказка:", &mut s.comment, "");
+                    });
+                    advanced_check(ui, &mut s.when);
+                });
+            },
+        );
+    }
+
+    // ------------------------------------------------------------- Run
+
+    fn run_form(ui: &mut Ui, r: &mut RunItem, uninstall: bool, ch: &Choices, pr: &Pretty) {
+        grid(ui, if uninstall { "urun" } else { "run" }, |ui| {
+            if !uninstall {
+                label(ui, "Когда запускать:");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut r.postinstall, false, "во время установки");
+                    ui.radio_value(&mut r.postinstall, true, "флажком на последней странице");
+                });
                 ui.end_row();
-                conditions(ui, &mut a.when);
+            }
+            label(ui, "Файл:");
+            folder_field(ui, if uninstall { "urunf" } else { "runf" }, &mut r.filename, FOLDERS, "program.exe");
+            ui.end_row();
+            text(ui, "Параметры:", &mut r.params, "/quiet");
+            if !uninstall {
+                if r.postinstall {
+                    loc_text(ui, "Текст флажка:", &mut r.description, "Запустить …", pr);
+                    let mut checked = !r.unchecked;
+                    if check(ui, "Флажок отмечен", &mut checked) {
+                        r.unchecked = !checked;
+                    }
+                } else {
+                    text(ui, "Текст во время запуска:", &mut r.status_msg, "Установка DirectX…");
+                }
+            }
+            let mut wait = !r.nowait;
+            if check(ui, "Ждать завершения", &mut wait) {
+                r.nowait = !wait;
+            }
+            check(ui, "Скрыть окно", &mut r.hidden);
+            check(ui, "Открыть как документ или ссылку", &mut r.shell_exec);
+            conditions(ui, &mut r.when, ch);
+        });
+        ui.collapsing("Ещё", |ui| {
+            grid(ui, "run2", |ui| {
+                text(ui, "Рабочая папка:", &mut r.workdir, "");
+                check(ui, "Пропустить, если файла нет", &mut r.skip_if_missing);
+                if !uninstall {
+                    check(ui, "Не запускать при тихой установке", &mut r.skip_if_silent);
+                }
+            });
+            advanced_check(ui, &mut r.when);
+        });
+    }
+
+    fn ui_run(&mut self, ui: &mut Ui) {
+        let pr = Pretty::new(&self.project);
+        let ch = Choices::new(&self.project, &pr);
+        card(ui, "При установке", |ui| {
+            hint(ui, "Например, установка DirectX / Visual C++ из {src}\\redist или флажок «Запустить программу» в конце.");
+            list_editor(
+                ui,
+                "run",
+                &mut self.project.run,
+                &mut self.sel[8],
+                "Ничего не запускается",
+                |r| {
+                    if r.postinstall {
+                        let d = pr.text(&r.description);
+                        format!("☑  {}", if d.is_empty() { pr.path(&r.filename) } else { d })
+                    } else {
+                        format!("▶  {}", pr.path(&r.filename))
+                    }
+                },
+                |ui, r| Self::run_form(ui, r, false, &ch, &pr),
+            );
+        });
+        card(ui, "При удалении программы", |ui| {
+            list_editor(ui, "urun", &mut self.project.uninstall_run, &mut self.sel[9], "Ничего не запускается", |r| format!("▶  {}", pr.path(&r.filename)), |ui, r| {
+                Self::run_form(ui, r, true, &ch, &pr)
             });
         });
     }
 
-    fn ui_tools(&mut self, ui: &mut Ui) {
-        heading(ui, "Инструменты", "Вспомогательные файлы, которые распаковываются только во временную папку {tmp} (как Flags: dontcopy в Inno): unarc.dll, precomp.exe, srep.exe и т. п.");
-        let app = &*self as *const App;
-        list_editor(ui, "tools", &mut self.project.tools, &mut self.sel[2], |t| t.source.clone(), |ui, t| {
-            let app = unsafe { &*app };
-            grid(ui, "tool", |ui| {
-                path_row(app, ui, "Файл:", &mut t.source, &[], false);
-                text(ui, "Имя в {tmp}:", &mut t.name, "пусто = как у файла");
-            });
-        });
+    // ------------------------------------------------------------- Dialogs
+
+    fn msg_field(&mut self, ui: &mut Ui, label_text: &str, key: &str, multiline: bool) {
+        label(ui, label_text);
+        let m = self.project.messages.entry("*".into()).or_default();
+        let mut v = m.get(key).cloned().unwrap_or_default();
+        let def = smk_core::messages::builtin("ru", key).unwrap_or("").replace("[name/ver]", "[name]");
+        let te = if multiline { egui::TextEdit::multiline(&mut v).desired_rows(2) } else { egui::TextEdit::singleline(&mut v) };
+        if ui.add(te.hint_text(def).desired_width(field_w(ui))).changed() {
+            if v.is_empty() {
+                m.remove(key);
+            } else {
+                m.insert(key.into(), v);
+            }
+        }
+        ui.end_row();
     }
 
     fn ui_dialogs(&mut self, ui: &mut Ui) {
-        heading(ui, "Диалоги мастера", "Страницы как в Inno Setup. Страницы лицензии/информации/компонентов/задач появляются автоматически, если для них есть данные.");
-        let app = &*self as *const App;
-        let app = unsafe { &*app };
-        let s = &mut self.project.setup;
-        grid(ui, "dlg", |ui| {
-            check(ui, "Приветствие", &mut s.show_welcome_page);
-            path_row(app, ui, "Лицензия (rtf/txt):", &mut s.license_file, &[("RTF/TXT", &["rtf", "txt"])], false);
-            path_row(app, ui, "Информация до установки:", &mut s.info_before_file, &[("RTF/TXT", &["rtf", "txt"])], false);
-            text(ui, "Пароль установки:", &mut s.password, "пусто = без пароля");
-            check(ui, "Выбор папки установки", &mut s.show_dir_page);
-            text(ui, "Папка по умолчанию:", &mut s.default_dir, "{pf}\\{#AppName}");
-            check(ui, "Разрешить установку в корень диска", &mut s.allow_root_directory);
-            check(ui, "Использовать папку предыдущей установки", &mut s.use_previous_dir);
-            check(ui, "Выбор папки в меню «Пуск»", &mut s.show_group_page);
-            text(ui, "Папка в меню «Пуск»:", &mut s.default_group, "{#AppName}");
-            check(ui, "Флажок «Не создавать папку в меню Пуск»", &mut s.allow_no_icons);
-            check(ui, "Страница «Всё готово к установке»", &mut s.show_ready_page);
-            check(ui, "Показывать папку на странице «Готово»", &mut s.always_show_dir_on_ready);
-            check(ui, "Показывать группу на странице «Готово»", &mut s.always_show_group_on_ready);
-            path_row(app, ui, "Информация после установки:", &mut s.info_after_file, &[("RTF/TXT", &["rtf", "txt"])], false);
-            check(ui, "Страница завершения", &mut s.show_finished_page);
-            check(ui, "Показывать время установки", &mut s.show_install_time);
-            check(ui, "Предложить перезагрузку", &mut s.restart_required);
-            check(ui, "Откат изменений при ошибке/отмене", &mut s.rollback_on_error);
-            text(ui, "Заголовок окна:", &mut s.window_title, "пусто = «Установка — Название»");
-            let mb = s.extra_disk_space / 1048576;
-            let mut mbv = mb;
-            ui.label("Доп. место на диске, МБ:");
-            ui.add(egui::DragValue::new(&mut mbv).range(0..=10_000_000));
-            ui.end_row();
-            if mbv != mb {
-                s.extra_disk_space = mbv * 1048576;
-            }
+        let base = self.base_dir();
+        let rtf: &[(&str, &[&str])] = &[("RTF/TXT", &["rtf", "txt"])];
+        card(ui, "Приветствие", |ui| {
+            grid(ui, "dw", |ui| {
+                check(ui, "Показывать страницу приветствия", &mut self.project.setup.show_welcome_page);
+                if self.project.setup.show_welcome_page {
+                    self.msg_field(ui, "Заголовок:", "WelcomeLabel1", false);
+                    self.msg_field(ui, "Текст:", "WelcomeLabel2", true);
+                }
+            });
         });
-        ui.add_space(8.0);
-        ui.collapsing("Свои тексты мастера (переопределение сообщений)", |ui| {
-            ui.label("Ключи как в Inno: WelcomeLabel1, WelcomeLabel2, FinishedLabel... Язык «*» — для всех языков. [name] — название программы.");
-            for key in ["WelcomeLabel1", "WelcomeLabel2", "FinishedHeadingLabel", "FinishedLabel"] {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{:<22}", key));
-                    let m = self.project.messages.entry("*".into()).or_default();
-                    let mut v = m.get(key).cloned().unwrap_or_default();
-                    if ui.add(egui::TextEdit::singleline(&mut v).hint_text("стандартный текст").desired_width(520.0)).changed() {
-                        if v.is_empty() {
-                            m.remove(key);
-                        } else {
-                            m.insert(key.into(), v);
-                        }
-                    }
-                });
-            }
-            self.project.messages.retain(|_, m| !m.is_empty());
+        card(ui, "Лицензия, информация, пароль", |ui| {
+            let s = &mut self.project.setup;
+            grid(ui, "dl", |ui| {
+                path_row(&base, ui, "Лицензионное соглашение:", &mut s.license_file, rtf, false);
+                path_row(&base, ui, "Информация до установки:", &mut s.info_before_file, rtf, false);
+                path_row(&base, ui, "Информация после установки:", &mut s.info_after_file, rtf, false);
+                text(ui, "Пароль установки:", &mut s.password, "пусто = без пароля");
+            });
+            hint(ui, "Пустое поле — страница не показывается.");
+        });
+        card(ui, "Папка установки", |ui| {
+            let s = &mut self.project.setup;
+            grid(ui, "dd", |ui| {
+                check(ui, "Разрешить выбрать папку", &mut s.show_dir_page);
+                label(ui, "Папка по умолчанию:");
+                folder_field(ui, "ddir", &mut s.default_dir, INSTALL_ROOTS, "{#AppName}");
+                ui.end_row();
+                check(ui, "Запоминать папку прошлой установки", &mut s.use_previous_dir);
+                check(ui, "Разрешить установку в корень диска", &mut s.allow_root_directory);
+            });
+        });
+        card(ui, "Меню «Пуск»", |ui| {
+            let s = &mut self.project.setup;
+            grid(ui, "dg", |ui| {
+                check(ui, "Разрешить выбрать папку в меню «Пуск»", &mut s.show_group_page);
+                text(ui, "Название папки:", &mut s.default_group, "{#AppName}");
+                check(ui, "Флажок «Не создавать папку в меню «Пуск»»", &mut s.allow_no_icons);
+            });
+        });
+        card(ui, "Всё готово к установке", |ui| {
+            let s = &mut self.project.setup;
+            grid(ui, "dr", |ui| {
+                check(ui, "Показывать сводку перед установкой", &mut s.show_ready_page);
+                if s.show_ready_page {
+                    check(ui, "В сводке — папку установки", &mut s.always_show_dir_on_ready);
+                    check(ui, "В сводке — папку меню «Пуск»", &mut s.always_show_group_on_ready);
+                }
+            });
+        });
+        card(ui, "Завершение", |ui| {
+            grid(ui, "df", |ui| {
+                check(ui, "Показывать страницу завершения", &mut self.project.setup.show_finished_page);
+                if self.project.setup.show_finished_page {
+                    self.msg_field(ui, "Заголовок:", "FinishedHeadingLabel", false);
+                    self.msg_field(ui, "Текст:", "FinishedLabel", true);
+                    check(ui, "Показывать время установки", &mut self.project.setup.show_install_time);
+                }
+                check(ui, "Предложить перезагрузить компьютер", &mut self.project.setup.restart_required);
+            });
+            hint(ui, "[name] в тексте — название программы.");
+        });
+        self.project.messages.retain(|_, m| !m.is_empty());
+        card(ui, "Прочее", |ui| {
+            let s = &mut self.project.setup;
+            grid(ui, "do", |ui| {
+                text(ui, "Заголовок окна:", &mut s.window_title, "пусто = «Установка — Название»");
+                check(ui, "Отменять все изменения при ошибке или отмене", &mut s.rollback_on_error);
+                label(ui, "Доп. место на диске:");
+                mb_field(ui, &mut s.extra_disk_space);
+                ui.end_row();
+            });
+            hint(ui, "Доп. место учитывается в проверке свободного места (например, под данные внешних архивов).");
         });
     }
 
+    // ------------------------------------------------------------- Interface
+
     fn ui_interface(&mut self, ui: &mut Ui) {
-        heading(ui, "Интерфейс", "Внешний вид — классический мастер Inno Setup. Картинки: большая 164×314 (×2 для HiDPI), маленькая 55×55. BMP/PNG/JPG.");
-        let app = &*self as *const App;
-        let app = unsafe { &*app };
+        let base = self.base_dir();
         let imgs: &[(&str, &[&str])] = &[("Изображения", &["bmp", "png", "jpg", "jpeg", "gif"])];
         let i = &mut self.project.interface;
-        grid(ui, "ui", |ui| {
-            path_row(app, ui, "Большая картинка:", &mut i.wizard_image, imgs, false);
-            path_row(app, ui, "Маленькая картинка:", &mut i.wizard_small_image, imgs, false);
-            path_row(app, ui, "Иконка setup.exe:", &mut i.setup_icon, &[("ICO", &["ico"])], false);
-            text(ui, "Цвет картинки по умолчанию:", &mut i.accent_color, "#1F5DA8");
-            text(ui, "Шрифт мастера:", &mut i.font, "системный (например, Candara, Segoe UI)");
-            ui.label("Размер шрифта, pt:");
-            ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut i.font_size).range(0..=20));
-                ui.label(RichText::new("0 = по умолчанию (9)").weak());
+        card(ui, "Картинки и иконка", |ui| {
+            grid(ui, "ui", |ui| {
+                path_row(&base, ui, "Большая картинка (слева):", &mut i.wizard_image, imgs, false);
+                path_row(&base, ui, "Маленькая (справа вверху):", &mut i.wizard_small_image, imgs, false);
+                path_row(&base, ui, "Иконка setup.exe:", &mut i.setup_icon, &[("ICO", &["ico"])], false);
+                label(ui, "Цвет, если нет картинки:");
+                ui.horizontal(|ui| {
+                    let mut rgb = hex_to_rgb(&i.accent_color).unwrap_or([0x1F, 0x5D, 0xA8]);
+                    if ui.color_edit_button_srgb(&mut rgb).changed() {
+                        i.accent_color = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                    }
+                    ui.add(egui::TextEdit::singleline(&mut i.accent_color).hint_text("#1F5DA8").desired_width(90.0));
+                });
+                ui.end_row();
             });
-            ui.end_row();
+            hint(ui, "Большая картинка 164×314 (или 328×628 для HiDPI), маленькая 55×55. BMP, PNG или JPG.");
         });
-        ui.add_space(10.0);
-        ui.label(RichText::new("Языки установщика").strong());
-        let s = &mut self.project.setup;
-        grid(ui, "langdlg", |ui| {
-            combo(ui, "Диалог выбора языка:", "ld", &mut s.language_dialog, &[("auto", "если языков больше одного"), ("always", "всегда"), ("never", "никогда")]);
+        card(ui, "Шрифт", |ui| {
+            grid(ui, "font", |ui| {
+                text(ui, "Шрифт мастера:", &mut i.font, "системный (Segoe UI, Candara…)");
+                label(ui, "Размер:");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut i.font_size).range(0..=20).suffix(" pt"));
+                    hint(ui, "0 = по умолчанию (9 pt)");
+                });
+                ui.end_row();
+            });
         });
-        for (id, name) in smk_core::messages::LANGS {
-            let idx = i.languages.iter().position(|l| smk_core::messages::normalize_lang(&l.id) == *id);
-            let mut on = idx.is_some();
-            ui.horizontal(|ui| {
+        card(ui, "Языки", |ui| {
+            let s = &mut self.project.setup;
+            for (id, name) in smk_core::messages::LANGS {
+                let idx = i.languages.iter().position(|l| smk_core::messages::normalize_lang(&l.id) == *id);
+                let mut on = idx.is_some();
                 if ui.checkbox(&mut on, *name).changed() {
                     if on {
                         i.languages.push(Language { id: id.to_string(), ..Default::default() });
@@ -780,277 +1617,433 @@ impl App {
                         i.languages.remove(k);
                     }
                 }
+            }
+            ui.add_space(4.0);
+            grid(ui, "langdlg", |ui| {
+                combo(ui, "Окно выбора языка:", "ld", &mut s.language_dialog, &[("auto", "если языков больше одного"), ("always", "всегда"), ("never", "никогда")]);
             });
-            if let Some(k) = i.languages.iter().position(|l| smk_core::messages::normalize_lang(&l.id) == *id) {
-                let l = &mut i.languages[k];
-                ui.indent(id, |ui| {
-                    grid(ui, &format!("lang{}", id), |ui| {
-                        path_row(app, ui, "Лицензия для языка:", &mut l.license_file, &[("RTF/TXT", &["rtf", "txt"])], false);
-                        path_row(app, ui, "Инфо до установки:", &mut l.info_before_file, &[("RTF/TXT", &["rtf", "txt"])], false);
-                        path_row(app, ui, "Инфо после установки:", &mut l.info_after_file, &[("RTF/TXT", &["rtf", "txt"])], false);
-                    });
+            if i.languages.len() > 1 {
+                ui.collapsing("Отдельная лицензия / информация для каждого языка", |ui| {
+                    for l in i.languages.iter_mut() {
+                        let id = smk_core::messages::normalize_lang(&l.id);
+                        ui.label(RichText::new(smk_core::messages::lang_name(id)).strong());
+                        grid(ui, &format!("lang{}", id), |ui| {
+                            let rtf: &[(&str, &[&str])] = &[("RTF/TXT", &["rtf", "txt"])];
+                            path_row(&base, ui, "Лицензия:", &mut l.license_file, rtf, false);
+                            path_row(&base, ui, "Инфо до установки:", &mut l.info_before_file, rtf, false);
+                            path_row(&base, ui, "Инфо после установки:", &mut l.info_after_file, rtf, false);
+                        });
+                    }
                 });
             }
+        });
+    }
+
+    // ------------------------------------------------------------- Requirements
+
+    fn ui_requirements(&mut self, ui: &mut Ui) {
+        let r = &mut self.project.requirements;
+        card(ui, "", |ui| {
+            grid(ui, "req", |ui| {
+                combo(ui, "Минимальная Windows:", "minwin", &mut r.min_windows, &[("6.1sp1", "Windows 7 SP1"), ("6.2", "Windows 8"), ("6.3", "Windows 8.1"), ("10.0", "Windows 10"), ("10.0.22000", "Windows 11")]);
+                combo(ui, "Разрядность:", "arch", &mut r.arch, &[("auto", "автоматически"), ("x64", "64-бит (Program Files)"), ("x86", "32-бит (Program Files (x86))")]);
+                combo(ui, "Права:", "priv", &mut r.privileges, &[("admin", "администратор (запрос UAC)"), ("lowest", "обычный пользователь")]);
+                label(ui, "Минимум памяти:");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut r.min_ram_mb).range(0..=1_000_000).suffix(" МБ"));
+                    hint(ui, "0 = не проверять");
+                });
+                ui.end_row();
+            });
+        });
+        ui.label(RichText::new("⚠ Сам установщик работает на Windows 10 и 11 (на Windows 7 не запустится).").color(WARN));
+    }
+
+    // ------------------------------------------------------------- Components
+
+    fn ui_components(&mut self, ui: &mut Ui) {
+        let pr = Pretty::new(&self.project);
+        card(ui, "Компоненты", |ui| {
+            hint(ui, "Пользователь отмечает их на странице «Выбор компонентов». Вложенность — через «\\» в коде: voice, voice\\rus.");
+            let types: Vec<(String, String)> = self.project.types.iter().map(|t| (t.name.clone(), pr.text(&t.description))).collect();
+            list_editor(
+                ui,
+                "comps",
+                &mut self.project.components,
+                &mut self.sel[4],
+                "Компонентов нет — устанавливается всё",
+                |c| format!("{}{}", "      ".repeat(c.name.matches('\\').count()), if c.description.is_empty() { c.name.clone() } else { pr.text(&c.description) }),
+                |ui, c| {
+                    grid(ui, "comp", |ui| {
+                        loc_text(ui, "Название:", &mut c.description, "Русская озвучка", &pr);
+                        text(ui, "Код:", &mut c.name, "voice\\rus");
+                        check(ui, "Отмечен по умолчанию", &mut c.checked);
+                        check(ui, "Обязательный (нельзя снять)", &mut c.fixed);
+                        check(ui, "Выбор одного из соседних (переключатель)", &mut c.exclusive);
+                        label(ui, "Доп. место на диске:");
+                        mb_field(ui, &mut c.extra_disk_space);
+                        ui.end_row();
+                        if !types.is_empty() {
+                            label(ui, "Входит в типы установки:");
+                            ui.horizontal_wrapped(|ui| {
+                                for (t, d) in &types {
+                                    let mut on = c.types.contains(t);
+                                    if ui.checkbox(&mut on, if d.is_empty() { t } else { d }).changed() {
+                                        if on {
+                                            c.types.push(t.clone());
+                                        } else {
+                                            c.types.retain(|x| x != t);
+                                        }
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                        }
+                    });
+                },
+            );
+        });
+        card(ui, "Типы установки", |ui| {
+            hint(ui, "Необязательно. Список вверху страницы компонентов: «Полная», «Компактная», «Выборочная»…");
+            list_editor(ui, "types", &mut self.project.types, &mut self.sel[3], "Типов нет", |t| pr.text(&t.description), |ui, t| {
+                grid(ui, "type", |ui| {
+                    combo(
+                        ui,
+                        "Название:",
+                        "tdesc",
+                        &mut t.description,
+                        &[("{cm:FullInstallation}", "Полная установка"), ("{cm:CompactInstallation}", "Компактная установка"), ("{cm:CustomInstallation}", "Выборочная установка")],
+                    );
+                    text(ui, "Или свой текст:", &mut t.description, "");
+                    text(ui, "Код:", &mut t.name, "full");
+                    check(ui, "Выборочная (пользователь сам отмечает компоненты)", &mut t.custom);
+                });
+            });
+        });
+        let names: Vec<String> = self.project.components.iter().map(|c| c.name.clone()).collect();
+        for c in self.project.components.iter_mut().filter(|c| c.name.is_empty()) {
+            c.name = unique_name("comp", &names);
+        }
+        let names: Vec<String> = self.project.types.iter().map(|t| t.name.clone()).collect();
+        for t in self.project.types.iter_mut().filter(|t| t.name.is_empty()) {
+            t.name = unique_name("type", &names);
         }
     }
 
-    fn ui_components(&mut self, ui: &mut Ui) {
-        heading(ui, "Компоненты", "Типы установки и дерево компонентов. Иерархия через «\\»: voice, voice\\rus. «Исключающий» = радиокнопка среди соседей.");
-        ui.label(RichText::new("Типы установки").strong());
-        list_editor(ui, "types", &mut self.project.types, &mut self.sel[3], |t| format!("{} — {}", t.name, t.description), |ui, t| {
-            grid(ui, "type", |ui| {
-                text(ui, "Имя:", &mut t.name, "full");
-                text(ui, "Описание:", &mut t.description, "{cm:FullInstallation}");
-                check(ui, "Выборочная (custom)", &mut t.custom);
-            });
-        });
-        ui.separator();
-        ui.label(RichText::new("Компоненты").strong());
-        let types: Vec<String> = self.project.types.iter().map(|t| t.name.clone()).collect();
-        list_editor(ui, "comps", &mut self.project.components, &mut self.sel[4], |c| format!("{}{}", "   ".repeat(c.name.matches('\\').count()), c.description), |ui, c| {
-            grid(ui, "comp", |ui| {
-                text(ui, "Имя:", &mut c.name, "voice\\rus");
-                text(ui, "Описание:", &mut c.description, "Русская озвучка");
-                check(ui, "Обязательный (fixed)", &mut c.fixed);
-                check(ui, "Исключающий (exclusive)", &mut c.exclusive);
-                check(ui, "Отмечен по умолчанию", &mut c.checked);
-                let mut mb = c.extra_disk_space / 1048576;
-                ui.label("Доп. место, МБ:");
-                if ui.add(egui::DragValue::new(&mut mb)).changed() {
-                    c.extra_disk_space = mb * 1048576;
-                }
-                ui.end_row();
-                ui.label("Входит в типы:");
-                ui.horizontal_wrapped(|ui| {
-                    for t in &types {
-                        let mut on = c.types.contains(t);
-                        if ui.checkbox(&mut on, t).changed() {
-                            if on {
-                                c.types.push(t.clone());
-                            } else {
-                                c.types.retain(|x| x != t);
-                            }
-                        }
-                    }
-                });
-                ui.end_row();
-            });
-        });
-    }
+    // ------------------------------------------------------------- Tasks
 
     fn ui_tasks(&mut self, ui: &mut Ui) {
-        heading(ui, "Задачи", "Флажки на странице «Дополнительные задачи» (ярлык на рабочем столе, установка .NET и т. п.). Используйте имя задачи в условиях файлов, ярлыков, запуска.");
-        list_editor(ui, "tasks", &mut self.project.tasks, &mut self.sel[5], |t| format!("{} — {}", t.name, t.description), |ui, t| {
-            grid(ui, "task", |ui| {
-                text(ui, "Имя:", &mut t.name, "desktopicon");
-                text(ui, "Описание:", &mut t.description, "{cm:CreateDesktopIcon}");
-                text(ui, "Группа:", &mut t.group, "{cm:AdditionalIcons}");
-                check(ui, "Не отмечена по умолчанию", &mut t.unchecked);
-                check(ui, "Исключающая (радиокнопка в группе)", &mut t.exclusive);
-                text(ui, "Только для компонентов:", &mut t.components, "");
-                text(ui, "Проверка (Check):", &mut t.check, "");
-                text(ui, "Мин. версия Windows:", &mut t.min_version, "6.1");
-                text(ui, "Только ниже версии:", &mut t.only_below_version, "6.1");
+        let pr = Pretty::new(&self.project);
+        let ch = Choices::new(&self.project, &pr);
+        hint(ui, "Флажки для ярлыков создаются автоматически (раздел «Ярлыки», «Создавать: спросить»). Здесь — свои: «Установить DirectX», «Ассоциировать файлы»…");
+        ui.add_space(6.0);
+        list_editor(
+            ui,
+            "tasks",
+            &mut self.project.tasks,
+            &mut self.sel[5],
+            "Своих флажков нет",
+            |t| format!("{}  {}", if t.unchecked { "☐" } else { "☑" }, pr.text(&t.description)),
+            |ui, t| {
+                grid(ui, "task", |ui| {
+                    loc_text(ui, "Текст флажка:", &mut t.description, "Установить DirectX", &pr);
+                    loc_text(ui, "Заголовок группы:", &mut t.group, "необязательно", &pr);
+                    let mut on = !t.unchecked;
+                    if check(ui, "Отмечен по умолчанию", &mut on) {
+                        t.unchecked = !on;
+                    }
+                    check(ui, "Переключатель (один из группы)", &mut t.exclusive);
+                    if !ch.comps.is_empty() || !t.components.is_empty() {
+                        label(ui, "Только для компонентов:");
+                        multi_pick(ui, &mut t.components, &ch.comps, "");
+                        ui.end_row();
+                    }
+                });
+                ui.collapsing("Ещё", |ui| {
+                    grid(ui, "task2", |ui| {
+                        text(ui, "Код:", &mut t.name, "");
+                        text(ui, "Условие:", &mut t.check, "IsWin64");
+                        text(ui, "Мин. версия Windows:", &mut t.min_version, "6.1");
+                        text(ui, "Только ниже версии:", &mut t.only_below_version, "");
+                    });
+                });
+                hint(ui, "Чтобы флажок что-то делал, отметьте его в условиях файла, архива, реестра или запуска.");
+            },
+        );
+        let names: Vec<String> = self.project.tasks.iter().map(|t| t.name.clone()).collect();
+        for t in self.project.tasks.iter_mut().filter(|t| t.name.is_empty()) {
+            t.name = unique_name("task", &names);
+        }
+    }
+
+    // ------------------------------------------------------------- Archives
+
+    fn ui_archives(&mut self, ui: &mut Ui) {
+        let base = self.base_dir();
+        let pr = Pretty::new(&self.project);
+        let ch = Choices::new(&self.project, &pr);
+        hint(ui, "Форматы: .smpk (свой, можно собрать прямо здесь), .7z, .zip, .tar(.gz/.xz/.zst/.br), FreeArc .arc (нужен unarc.dll в «Инструментах»).");
+        ui.collapsing("Быстрый ввод: одна строка — один архив", |ui| {
+            ui.add(egui::TextEdit::multiline(&mut self.archive_quick).hint_text("data1.arc\ndata2.arc\nvoice_rus.7z -> {app}\\sound").desired_rows(5).desired_width(field_w(ui)).font(egui::TextStyle::Monospace));
+            if ui.button("Добавить в список").clicked() {
+                for l in self.archive_quick.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                    self.project.archives.push(ArchiveItem::from_short(l));
+                }
+                self.archive_quick.clear();
+            }
+        });
+        ui.add_space(6.0);
+        list_editor(ui, "arcs", &mut self.project.archives, &mut self.sel[1], "Архивов нет", |a| format!("📦  {}  »  {}", a.file, pr.path(&a.dest)), |ui, a| {
+            grid(ui, "arc", |ui| {
+                text(ui, "Имя файла (рядом с setup.exe):", &mut a.file, "data1.arc  или  data*.arc");
+                label(ui, "Распаковать в:");
+                folder_field(ui, "adest", &mut a.dest, FOLDERS, "подпапка");
+                ui.end_row();
+                text(ui, "Пароль:", &mut a.password, "");
+                check(ui, "Обязателен (ошибка, если не найден)", &mut a.required);
+                text(ui, "Если не найден — попросить:", &mut a.disk_prompt, "Вставьте диск 2…");
+                check(ui, "Удалить архив после распаковки", &mut a.delete_after);
+                path_row(&base, ui, "Собрать из папки:", &mut a.pack_from, &[], true);
+                conditions(ui, &mut a.when, &ch);
+            });
+            hint(ui, "«Собрать из папки» — сборщик сам создаст .smpk рядом с setup.exe.");
+            ui.collapsing("Ещё", |ui| {
+                grid(ui, "arc2", |ui| {
+                    combo(ui, "Формат:", "afmt", &mut a.format, &[("", "по расширению"), ("smpk", "smpk"), ("7z", "7z"), ("zip", "zip"), ("tar", "tar"), ("tar.gz", "tar.gz"), ("tar.xz", "tar.xz"), ("tar.zst", "tar.zst"), ("tar.br", "tar.br"), ("arc", "FreeArc .arc")]);
+                });
+                advanced_check(ui, &mut a.when);
             });
         });
     }
 
-    fn ui_shortcuts(&mut self, ui: &mut Ui) {
-        heading(ui, "Ярлыки", "Имя ярлыка — путь без .lnk: {group}\\Программа, {autodesktop}\\Программа. Цель может быть URL — создастся .url");
-        list_editor(ui, "lnk", &mut self.project.shortcuts, &mut self.sel[6], |s| s.name.clone(), |ui, s| {
-            grid(ui, "lnk", |ui| {
-                text(ui, "Ярлык:", &mut s.name, "{group}\\{#AppName}");
-                text(ui, "Объект:", &mut s.target, "{app}\\{#AppExeName}");
-                text(ui, "Параметры:", &mut s.params, "");
-                text(ui, "Рабочая папка:", &mut s.workdir, "");
-                text(ui, "Иконка:", &mut s.icon, "{app}\\app.ico");
-                ui.label("Индекс иконки:");
-                ui.add(egui::DragValue::new(&mut s.icon_index));
-                ui.end_row();
-                text(ui, "Комментарий:", &mut s.comment, "");
-                conditions(ui, &mut s.when);
-            });
-        });
-    }
+    // ------------------------------------------------------------- Registry
 
     fn ui_registry(&mut self, ui: &mut Ui) {
-        heading(ui, "Реестр", "Записи реестра. HKA = HKLM для администратора, иначе HKCU.");
-        list_editor(ui, "reg", &mut self.project.registry, &mut self.sel[7], |r| format!("{}\\{} [{}]", r.root, r.subkey, r.value_name), |ui, r| {
-            grid(ui, "reg", |ui| {
-                combo(ui, "Корень:", "root", &mut r.root, &[("HKA", "HKA (авто)"), ("HKLM", "HKLM"), ("HKCU", "HKCU"), ("HKCR", "HKCR"), ("HKU", "HKU")]);
-                text(ui, "Раздел:", &mut r.subkey, "Software\\MyCompany\\MyApp");
-                combo(ui, "Тип:", "vt", &mut r.value_type, &[("none", "только раздел"), ("string", "строка"), ("expandsz", "расширяемая строка"), ("multisz", "мультистрока"), ("dword", "DWORD"), ("qword", "QWORD"), ("binary", "двоичный")]);
-                text(ui, "Имя параметра:", &mut r.value_name, "");
-                text(ui, "Значение:", &mut r.value_data, "{app}");
-                combo(ui, "При удалении:", "un", &mut r.uninstall, &[("none", "оставить"), ("deletevalue", "удалить параметр"), ("deletekeyifempty", "удалить раздел, если пуст"), ("deletekey", "удалить раздел")]);
-                check(ui, "Только если параметра нет", &mut r.only_if_missing);
-                check(ui, "Сначала удалить раздел", &mut r.delete_key_first);
-                check(ui, "Удалить параметр (вместо записи)", &mut r.delete_value);
-                conditions(ui, &mut r.when);
-            });
-        });
+        let pr = Pretty::new(&self.project);
+        let ch = Choices::new(&self.project, &pr);
+        list_editor(
+            ui,
+            "reg",
+            &mut self.project.registry,
+            &mut self.sel[7],
+            "Записей нет",
+            |r| format!("🗝  {}\\{}{}", r.root, pr.text(&r.subkey), if r.value_name.is_empty() { String::new() } else { format!("  [{}]", r.value_name) }),
+            |ui, r| {
+                grid(ui, "reg", |ui| {
+                    combo(ui, "Раздел:", "root", &mut r.root, &[("HKA", "авто (HKLM для админа, иначе HKCU)"), ("HKLM", "HKEY_LOCAL_MACHINE"), ("HKCU", "HKEY_CURRENT_USER"), ("HKCR", "HKEY_CLASSES_ROOT"), ("HKU", "HKEY_USERS")]);
+                    text(ui, "Ключ:", &mut r.subkey, "Software\\Компания\\Программа");
+                    text(ui, "Имя параметра:", &mut r.value_name, "пусто = по умолчанию");
+                    combo(ui, "Тип:", "vt", &mut r.value_type, &[("string", "строка"), ("expandsz", "строка с %переменными%"), ("multisz", "многострочный"), ("dword", "DWORD (число)"), ("qword", "QWORD"), ("binary", "двоичный"), ("none", "только создать ключ")]);
+                    text(ui, "Значение:", &mut r.value_data, "{app}");
+                    combo(ui, "При удалении программы:", "un", &mut r.uninstall, &[("deletevalue", "удалить параметр"), ("deletekeyifempty", "удалить ключ, если пуст"), ("deletekey", "удалить ключ целиком"), ("none", "оставить")]);
+                    conditions(ui, &mut r.when, &ch);
+                });
+                ui.collapsing("Ещё", |ui| {
+                    grid(ui, "reg2", |ui| {
+                        check(ui, "Только если параметра ещё нет", &mut r.only_if_missing);
+                        check(ui, "Сначала удалить ключ", &mut r.delete_key_first);
+                        check(ui, "Удалить параметр (вместо записи)", &mut r.delete_value);
+                    });
+                    advanced_check(ui, &mut r.when);
+                });
+            },
+        );
     }
 
-    fn run_form(ui: &mut Ui, r: &mut RunItem, uninstall: bool) {
-        grid(ui, "run", |ui| {
-            text(ui, "Файл:", &mut r.filename, "{app}\\{#AppExeName}  или  {src}\\bin\\net.exe");
-            text(ui, "Параметры:", &mut r.params, "/q");
-            text(ui, "Рабочая папка:", &mut r.workdir, "");
-            if !uninstall {
-                check(ui, "После установки (флажок на последней странице)", &mut r.postinstall);
-                text(ui, "Текст флажка:", &mut r.description, "{cm:LaunchProgram,{#AppName}}");
-                check(ui, "Флажок снят по умолчанию", &mut r.unchecked);
-                text(ui, "Статус во время запуска:", &mut r.status_msg, "Установка .NET...");
-                check(ui, "Пропускать при тихой установке", &mut r.skip_if_silent);
-            }
-            check(ui, "Не ждать завершения", &mut r.nowait);
-            check(ui, "Скрытое окно", &mut r.hidden);
-            check(ui, "Открыть через оболочку (документы, URL)", &mut r.shell_exec);
-            check(ui, "Пропустить, если файла нет", &mut r.skip_if_missing);
-            conditions(ui, &mut r.when);
-        });
-    }
-
-    fn ui_run(&mut self, ui: &mut Ui) {
-        heading(ui, "Запуск программ", "[Run]: во время установки (например, установка Python/.NET из {src}\\bin) или флажки «Запустить программу» на последней странице.");
-        list_editor(ui, "run", &mut self.project.run, &mut self.sel[8], |r| format!("{}{}", if r.postinstall { "☑ " } else { "▶ " }, r.filename), |ui, r| Self::run_form(ui, r, false));
-        ui.separator();
-        ui.label(RichText::new("При деинсталляции ([UninstallRun])").strong());
-        list_editor(ui, "urun", &mut self.project.uninstall_run, &mut self.sel[9], |r| r.filename.clone(), |ui, r| Self::run_form(ui, r, true));
-    }
-
-    fn ui_requirements(&mut self, ui: &mut Ui) {
-        heading(ui, "Требования", "");
-        let r = &mut self.project.requirements;
-        grid(ui, "req", |ui| {
-            text(ui, "Минимальная Windows:", &mut r.min_windows, "6.1sp1 (Win7 SP1), 10.0");
-            combo(ui, "Разрядность установщика:", "arch", &mut r.arch, &[("auto", "авто (x64; x86 если нужен 32-битный unarc.dll)"), ("x64", "x64 — Program Files"), ("x86", "x86 — Program Files (x86)")]);
-            combo(ui, "Права:", "priv", &mut r.privileges, &[("admin", "администратор (UAC)"), ("lowest", "текущий пользователь")]);
-            ui.label("Мин. ОЗУ, МБ:");
-            ui.add(egui::DragValue::new(&mut r.min_ram_mb).range(0..=1_000_000));
-            ui.end_row();
-        });
-        ui.label(RichText::new("Примечание: стаб собирается современным Rust и требует Windows 10/11 (на Windows 7 не запустится).").small().color(Color32::from_rgb(160, 90, 0)));
-    }
+    // ------------------------------------------------------------- Uninstall
 
     fn ui_uninstall(&mut self, ui: &mut Ui) {
-        heading(ui, "Деинсталляция", "Деинсталлятор unins000.exe, запись в «Программы и компоненты», журнал установленных файлов.");
-        let app = &*self as *const App;
-        let app = unsafe { &*app };
-        let u = &mut self.project.uninstall;
-        grid(ui, "un", |ui| {
-            check(ui, "Создавать деинсталлятор", &mut u.enabled);
-            text(ui, "Папка деинсталлятора:", &mut u.files_dir, "{app}");
-            text(ui, "Имя в списке программ:", &mut u.display_name, "пусто = «Название Версия»");
-            text(ui, "Иконка (путь при установке):", &mut u.display_icon, "{app}\\{#AppExeName}");
-            path_row(app, ui, "Иконка из файла .ico:", &mut u.icon_file, &[("ICO", &["ico"])], false);
-            check(ui, "Предложить перезагрузку после удаления", &mut u.restart_computer);
-        });
-        ui.separator();
-        ui.label(RichText::new("Удалить перед установкой ([InstallDelete])").strong());
-        list_editor(ui, "idel", &mut self.project.install_delete, &mut self.sel[10], |d| d.path.clone(), |ui, d| {
-            grid(ui, "idel", |ui| {
-                text(ui, "Путь:", &mut d.path, "{app}\\old.dll");
-                combo(ui, "Тип:", "k1", &mut d.kind, &[("files", "файлы"), ("filesandordirs", "файлы и папки"), ("dirifempty", "папку, если пуста")]);
+        let base = self.base_dir();
+        let pr = Pretty::new(&self.project);
+        card(ui, "Деинсталлятор", |ui| {
+            let u = &mut self.project.uninstall;
+            grid(ui, "un", |ui| {
+                check(ui, "Создавать деинсталлятор и запись в «Программы и компоненты»", &mut u.enabled);
+                if u.enabled {
+                    text(ui, "Название в списке программ:", &mut u.display_name, "пусто = «Название Версия»");
+                    text(ui, "Иконка в списке:", &mut u.display_icon, "пусто = главный файл программы");
+                    path_row(&base, ui, "Или файл .ico из проекта:", &mut u.icon_file, &[("ICO", &["ico"])], false);
+                    label(ui, "Папка деинсталлятора:");
+                    folder_field(ui, "undir", &mut u.files_dir, FOLDERS, "");
+                    ui.end_row();
+                    check(ui, "Предложить перезагрузку после удаления", &mut u.restart_computer);
+                }
             });
         });
-        ui.separator();
-        ui.label(RichText::new("Удалить при деинсталляции ([UninstallDelete])").strong());
-        list_editor(ui, "udel", &mut self.project.uninstall_delete, &mut self.sel[11], |d| d.path.clone(), |ui, d| {
-            grid(ui, "udel", |ui| {
-                text(ui, "Путь:", &mut d.path, "{app}");
-                combo(ui, "Тип:", "k2", &mut d.kind, &[("files", "файлы"), ("filesandordirs", "файлы и папки"), ("dirifempty", "папку, если пуста")]);
+        let kinds: &[(&str, &str)] = &[("filesandordirs", "файлы и папки"), ("files", "только файлы"), ("dirifempty", "папку, если пуста")];
+        card(ui, "Удалять при удалении программы", |ui| {
+            hint(ui, "Обычно — вся папка программы, включая файлы, созданные после установки (настройки, сохранения).");
+            list_editor(ui, "udel", &mut self.project.uninstall_delete, &mut self.sel[11], "Ничего дополнительно", |d| format!("🗑  {}", pr.path(&d.path)), |ui, d| {
+                grid(ui, "udel", |ui| {
+                    label(ui, "Путь:");
+                    folder_field(ui, "udelp", &mut d.path, FOLDERS, "*.log");
+                    ui.end_row();
+                    combo(ui, "Что удалить:", "k2", &mut d.kind, kinds);
+                });
+            });
+        });
+        card(ui, "Удалять перед установкой", |ui| {
+            hint(ui, "Например, старые файлы прошлой версии.");
+            list_editor(ui, "idel", &mut self.project.install_delete, &mut self.sel[10], "Ничего", |d| format!("🗑  {}", pr.path(&d.path)), |ui, d| {
+                grid(ui, "idel", |ui| {
+                    label(ui, "Путь:");
+                    folder_field(ui, "idelp", &mut d.path, FOLDERS, "old.dll");
+                    ui.end_row();
+                    combo(ui, "Что удалить:", "k1", &mut d.kind, kinds);
+                });
             });
         });
     }
 
-    fn ui_compression(&mut self, ui: &mut Ui) {
-        heading(ui, "Сжатие и вывод", "");
-        let c = &mut self.project.compression;
-        grid(ui, "comp", |ui| {
-            combo(
-                ui,
-                "Метод:",
-                "meth",
-                &mut c.method,
-                &[("lzma2", "LZMA2 (xz) — максимальное сжатие"), ("zstd", "Zstandard — очень быстрая распаковка"), ("brotli", "Brotli"), ("none", "без сжатия")],
-            );
-            let max = match c.method.as_str() {
-                "zstd" => 22,
-                "brotli" => 11,
-                _ => 9,
-            };
-            ui.label("Уровень:");
-            ui.add(egui::Slider::new(&mut c.level, 0..=max));
-            ui.end_row();
-            if c.method == "lzma2" {
-                check(ui, "Extreme (медленнее, чуть лучше)", &mut c.extreme);
-                check(ui, "BCJ-фильтр x86 для exe/dll", &mut c.bcj);
-            }
-            ui.label("Словарь / окно, МБ:");
-            ui.add(egui::Slider::new(&mut c.dict_mb, 1..=1024).logarithmic(true));
-            ui.end_row();
-            ui.label("Потоков (0 = авто):");
-            ui.add(egui::DragValue::new(&mut c.threads).range(0..=256));
-            ui.end_row();
-            check(ui, "Хранить одинаковые файлы один раз", &mut c.dedupe);
-        });
-        ui.label(
-            RichText::new(
-                "LZMA2 со словарём 64–256 МБ даёт сжатие уровня FreeArc -m4/-m5 без precomp/srep. Zstd 19–22 с длинным окном сжимает чуть хуже, \
-                 но распаковывается в 5–10 раз быстрее. Brotli хорош для текстов/веба, для exe обычно уступает LZMA2. \
-                 Память распаковки ≈ размер словаря.",
-            )
-            .small(),
-        );
-        ui.separator();
-        let o = &mut self.project.output;
-        grid(ui, "out", |ui| {
-            text(ui, "Папка вывода:", &mut o.dir, "compiled");
-            text(ui, "Имя setup-файла:", &mut o.base_name, "{#AppName}_setup");
-            check(ui, "Разбивать на тома (setup-1.bin, setup-2.bin …)", &mut o.disk_spanning);
-            if o.disk_spanning {
-                ui.label("Размер тома, МБ:");
-                ui.add(egui::DragValue::new(&mut o.slice_size_mb).range(1..=1_000_000));
-                ui.end_row();
-            }
+    // ------------------------------------------------------------- Tools
+
+    fn ui_tools(&mut self, ui: &mut Ui) {
+        let base = self.base_dir();
+        hint(ui, "Распаковываются во временную папку {tmp} и удаляются после установки. Нужны для FreeArc (unarc.dll) и запуска своих утилит.");
+        ui.add_space(6.0);
+        list_editor(ui, "tools", &mut self.project.tools, &mut self.sel[2], "Инструментов нет", |t| format!("🔧  {}", t.source), |ui, t| {
+            grid(ui, "tool", |ui| {
+                path_row(&base, ui, "Файл:", &mut t.source, &[], false);
+                text(ui, "Имя во временной папке:", &mut t.name, "пусто = как у файла");
+            });
         });
     }
+
+    // ------------------------------------------------------------- Output
+
+    fn ui_output(&mut self, ui: &mut Ui) {
+        let c = &mut self.project.compression;
+        card(ui, "Сжатие", |ui| {
+            let preset = match (c.method.as_str(), c.level) {
+                ("lzma2", 9) if c.extreme => "max",
+                ("lzma2", _) => "custom",
+                ("zstd", _) => "fast",
+                ("none", _) => "none",
+                _ => "custom",
+            };
+            let mut p = preset.to_string();
+            ui.horizontal_wrapped(|ui| {
+                for (k, t, d) in [
+                    ("max", "Максимальное", "LZMA2, меньше размер"),
+                    ("fast", "Быстрая установка", "Zstd, распаковка в 5–10 раз быстрее"),
+                    ("none", "Без сжатия", "для уже сжатых данных"),
+                ] {
+                    if tile(ui, p == k, t, d) {
+                        p = k.to_string();
+                    }
+                }
+            });
+            if p != preset {
+                match p.as_str() {
+                    "max" => {
+                        c.method = "lzma2".into();
+                        c.level = 9;
+                        c.extreme = true;
+                        c.dict_mb = c.dict_mb.max(64);
+                    }
+                    "fast" => {
+                        c.method = "zstd".into();
+                        c.level = 19;
+                    }
+                    "none" => c.method = "none".into(),
+                    _ => {}
+                }
+            }
+            ui.add_space(4.0);
+            ui.collapsing("Тонкая настройка", |ui| {
+                grid(ui, "comp", |ui| {
+                    combo(ui, "Метод:", "meth", &mut c.method, &[("lzma2", "LZMA2"), ("zstd", "Zstandard"), ("brotli", "Brotli"), ("none", "без сжатия")]);
+                    let max = match c.method.as_str() {
+                        "zstd" => 22,
+                        "brotli" => 11,
+                        _ => 9,
+                    };
+                    label(ui, "Уровень:");
+                    ui.add(egui::Slider::new(&mut c.level, 0..=max));
+                    ui.end_row();
+                    if c.method == "lzma2" {
+                        check(ui, "Extreme (медленнее, чуть лучше)", &mut c.extreme);
+                        check(ui, "Фильтр для exe/dll (BCJ x86)", &mut c.bcj);
+                    }
+                    label(ui, "Словарь:");
+                    ui.add(egui::Slider::new(&mut c.dict_mb, 1..=1024).logarithmic(true).suffix(" МБ"));
+                    ui.end_row();
+                    label(ui, "Потоков:");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut c.threads).range(0..=256));
+                        hint(ui, "0 = авто");
+                    });
+                    ui.end_row();
+                    check(ui, "Хранить одинаковые файлы один раз", &mut c.dedupe);
+                });
+                hint(ui, "Для распаковки нужно ОЗУ примерно размером со словарь.");
+            });
+        });
+        card(ui, "Готовый установщик", |ui| {
+            let o = &mut self.project.output;
+            grid(ui, "out", |ui| {
+                text(ui, "Папка:", &mut o.dir, "compiled");
+                text(ui, "Имя файла (без .exe):", &mut o.base_name, "{#AppName}_setup");
+                check(ui, "Разбить на части (setup-1.bin, setup-2.bin…)", &mut o.disk_spanning);
+                if o.disk_spanning {
+                    label(ui, "Размер части:");
+                    ui.add(egui::DragValue::new(&mut o.slice_size_mb).range(1..=1_000_000).suffix(" МБ"));
+                    ui.end_row();
+                }
+            });
+        });
+    }
+
+    // ------------------------------------------------------------- Build
 
     fn ui_build(&mut self, ui: &mut Ui, ctx: &egui::Context) {
-        heading(ui, "Сборка", "F9 — собрать. После сборки установщик автоматически проверяется (распаковка + CRC всех файлов).");
         let (running, progress, output, err) = {
             let s = self.build.lock().unwrap();
             (s.running, s.progress, s.output.clone(), s.error.clone())
         };
-        ui.horizontal(|ui| {
-            if ui.add_enabled(!running, egui::Button::new(RichText::new("🔨 Собрать установщик").size(16.0))).clicked() {
-                self.start_build();
-            }
-            if running && ui.button("Отменить").clicked() {
-                self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-            if let Some(o) = &output {
-                if ui.button("📂 Открыть папку").clicked() {
-                    if let Some(d) = o.parent() {
-                        open_folder(d);
+        card(ui, "", |ui| {
+            ui.horizontal(|ui| {
+                let b = egui::Button::new(RichText::new("🔨  Собрать установщик").size(16.0).strong().color(Color32::WHITE))
+                    .fill(if running { MUTED } else { ACCENT })
+                    .rounding(Rounding::same(6.0))
+                    .min_size(vec2(220.0, 38.0));
+                if ui.add_enabled(!running, b).clicked() {
+                    self.start_build();
+                }
+                if running && ui.button("Отменить").clicked() {
+                    self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                if let Some(o) = &output {
+                    if ui.button("📂  Открыть папку").clicked() {
+                        if let Some(d) = o.parent() {
+                            open_folder(d);
+                        }
                     }
                 }
+            });
+            if running || progress > 0.0 {
+                ui.add_space(6.0);
+                ui.add(egui::ProgressBar::new(progress).show_percentage().animate(running).fill(ACCENT));
+            }
+            ui.add_space(4.0);
+            if let Some(e) = err {
+                ui.label(RichText::new(format!("✖  {}", e)).color(ERR));
+            } else if let Some(o) = output {
+                ui.label(RichText::new(format!("✔  Готово: {}", o.display())).color(OK).strong());
+            } else if running {
+                hint(ui, "Идёт сборка…");
             }
         });
-        ui.add(egui::ProgressBar::new(progress).show_percentage().animate(running));
-        if let Some(e) = err {
-            ui.colored_label(Color32::RED, e);
-        } else if let Some(o) = output {
-            ui.colored_label(Color32::from_rgb(0, 130, 0), format!("Готово: {}", o.display()));
-        }
         if running {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
-        ui.separator();
         let log = self.build.lock().unwrap().log.join("\n");
-        egui::ScrollArea::vertical().id_salt("log").stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
-            ui.add(egui::TextEdit::multiline(&mut log.as_str()).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).desired_rows(20));
+        egui::Frame::none().fill(Color32::from_rgb(0x1C, 0x22, 0x2B)).rounding(Rounding::same(8.0)).inner_margin(Margin::same(12.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical().id_salt("log").stick_to_bottom(true).max_height(460.0).auto_shrink([false, false]).show(ui, |ui| {
+                let shown = if log.is_empty() { "Журнал сборки пуст." } else { log.as_str() };
+                ui.label(RichText::new(shown).monospace().color(Color32::from_rgb(0xD0, 0xD7, 0xE1)));
+            });
         });
     }
 }
