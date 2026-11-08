@@ -52,6 +52,8 @@ struct BuildState {
     log: Vec<String>,
     output: Option<PathBuf>,
     error: Option<String>,
+    /// Project produced by a background setup.exe import, to be opened.
+    imported: Option<PathBuf>,
 }
 
 struct App {
@@ -116,7 +118,59 @@ impl App {
         self.path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     }
 
+    /// Import a compiled Inno Setup installer into `<dir>/setup_project/`
+    /// (in the background; the project opens when done).
+    fn import_exe(&mut self, p: &Path) {
+        if self.build.lock().unwrap().running {
+            return;
+        }
+        let dir = crate::default_import_dir(p);
+        let st = self.build.clone();
+        {
+            let mut s = st.lock().unwrap();
+            *s = BuildState { running: true, ..Default::default() };
+            s.log.push(format!("Импорт {} → {}", p.display(), dir.display()));
+        }
+        self.section = Section::Build;
+        self.status = "Импорт установщика…".into();
+        let p = p.to_path_buf();
+        std::thread::spawn(move || {
+            let st2 = st.clone();
+            let log = move |s: &str| {
+                let mut b = st2.lock().unwrap();
+                if let Some(pct) = s.strip_prefix("\rИзвлечение файлов: ").and_then(|x| x.trim_end_matches('%').parse::<f32>().ok()) {
+                    b.progress = pct / 100.0;
+                } else if !s.is_empty() && !s.starts_with('\r') {
+                    b.log.push(s.to_string());
+                }
+            };
+            let r = crate::inno_exe::import(&p, &dir, &log).and_then(|r| {
+                project_io::save(&r.imported.project, &r.project_path)?;
+                Ok(r)
+            });
+            let mut b = st.lock().unwrap();
+            b.running = false;
+            match r {
+                Ok(r) => {
+                    for w in &r.imported.warnings {
+                        b.log.push(format!("Импорт: {}", w));
+                    }
+                    b.log.push(format!("Проект сохранён: {}", r.project_path.display()));
+                    b.imported = Some(r.project_path);
+                }
+                Err(e) => {
+                    b.log.push(format!("Ошибка импорта: {}", e));
+                    b.error = Some(e);
+                }
+            }
+        });
+    }
+
     fn open(&mut self, p: &Path) {
+        if p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
+            self.import_exe(p);
+            return;
+        }
         let is_iss = p.extension().map(|e| e.eq_ignore_ascii_case("iss")).unwrap_or(false);
         let r = if is_iss {
             iss::import(p, &Default::default()).map(|i| {
@@ -355,6 +409,11 @@ fn list_editor<T: Default + Clone>(
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let imported = self.build.lock().unwrap().imported.take();
+        if let Some(p) = imported {
+            self.open(&p);
+            self.section = Section::Build;
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::F9)) {
             self.start_build();
         }
@@ -393,6 +452,11 @@ impl eframe::App for App {
                 if ui.button("🗁 Импорт .iss").clicked() {
                     if let Some(p) = rfd::FileDialog::new().add_filter("Inno Setup", &["iss"]).pick_file() {
                         self.open(&p);
+                    }
+                }
+                if ui.button("📦 Импорт setup.exe").on_hover_text("Разобрать готовый установщик Inno Setup 5.2.5–6.3 в проект (файлы, задачи, ярлыки, картинки, архивы ISDone)").clicked() {
+                    if let Some(p) = rfd::FileDialog::new().add_filter("Установщик Inno Setup", &["exe"]).pick_file() {
+                        self.import_exe(&p);
                     }
                 }
                 ui.separator();
@@ -670,6 +734,13 @@ impl App {
             path_row(app, ui, "Маленькая картинка:", &mut i.wizard_small_image, imgs, false);
             path_row(app, ui, "Иконка setup.exe:", &mut i.setup_icon, &[("ICO", &["ico"])], false);
             text(ui, "Цвет картинки по умолчанию:", &mut i.accent_color, "#1F5DA8");
+            text(ui, "Шрифт мастера:", &mut i.font, "системный (например, Candara, Segoe UI)");
+            ui.label("Размер шрифта, pt:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut i.font_size).range(0..=20));
+                ui.label(RichText::new("0 = по умолчанию (9)").weak());
+            });
+            ui.end_row();
         });
         ui.add_space(10.0);
         ui.label(RichText::new("Языки установщика").strong());

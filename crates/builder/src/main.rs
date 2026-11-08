@@ -5,6 +5,7 @@ mod compile;
 #[cfg(feature = "gui")]
 mod gui;
 mod images;
+mod inno_exe;
 mod iss;
 mod pe;
 mod project_io;
@@ -37,9 +38,11 @@ enum Cmd {
         #[arg(long)]
         verify: bool,
     },
-    /// Конвертировать .iss в проект .smp
+    /// Конвертировать .iss или готовый Inno setup.exe в проект .smp
     Import {
+        /// Скрипт .iss или скомпилированный установщик Inno Setup (setup.exe)
         script: PathBuf,
+        /// Для .iss — файл .smp; для setup.exe — папка проекта
         #[arg(short, long)]
         out: Option<PathBuf>,
         #[arg(short = 'D', value_parser = parse_kv)]
@@ -147,6 +150,23 @@ fn run_cli(cmd: Cmd) -> Result<(), String> {
             }
             Ok(())
         }
+        Cmd::Import { script, out, define: _ } if is_exe(&script) => {
+            let dir = out.unwrap_or_else(|| default_import_dir(&script));
+            let log = |s: &str| {
+                if s.starts_with('\r') {
+                    eprint!("{}", s);
+                } else {
+                    eprintln!("{}", s);
+                }
+            };
+            let r = inno_exe::import(&script, &dir, &log)?;
+            for w in &r.imported.warnings {
+                eprintln!("Предупреждение: {}", w);
+            }
+            project_io::save(&r.imported.project, &r.project_path)?;
+            println!("Проект сохранён: {}", r.project_path.display());
+            Ok(())
+        }
         Cmd::Import { script, out, define } => {
             let defs: BTreeMap<String, String> = define.into_iter().collect();
             let r = iss::import(&script, &defs)?;
@@ -183,6 +203,16 @@ fn run_cli(cmd: Cmd) -> Result<(), String> {
         }
         Cmd::Gui { .. } => unreachable!(),
     }
+}
+
+fn is_exe(p: &std::path::Path) -> bool {
+    p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false)
+}
+
+/// `.../GTA/setup.exe` -> `.../GTA/setup_project`
+pub fn default_import_dir(setup: &std::path::Path) -> PathBuf {
+    let stem = setup.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "setup".into());
+    setup.parent().unwrap_or(std::path::Path::new(".")).join(format!("{}_project", stem))
 }
 
 fn progress_bar() -> impl Fn(f32) + Send + Sync {

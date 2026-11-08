@@ -1511,7 +1511,7 @@ pub fn run(init: Init) -> i32 {
     let mut wz = Box::new(Wizard {
         hwnd: std::ptr::null_mut(),
         s,
-        f: make_fonts(),
+        f: make_fonts_with(&m.interface.font, m.interface.font_size),
         p: init.p,
         m,
         ctx: ctx.clone(),

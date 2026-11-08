@@ -20,6 +20,9 @@ fn is_empty(s: &str) -> bool {
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0
 }
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
 fn is_zero_i32(v: &i32) -> bool {
     *v == 0
 }
@@ -219,6 +222,12 @@ pub struct Interface {
     /// Background colour for the default gradient image (#RRGGBB).
     #[serde(skip_serializing_if = "is_empty")]
     pub accent_color: String,
+    /// Wizard font face (e.g. "Candara"). Empty = system dialog font.
+    #[serde(skip_serializing_if = "is_empty")]
+    pub font: String,
+    /// Wizard font size in points. 0 = system default (9 pt).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub font_size: u32,
     pub languages: Vec<Language>,
 }
 
@@ -229,6 +238,8 @@ impl Default for Interface {
             wizard_small_image: String::new(),
             setup_icon: String::new(),
             accent_color: String::new(),
+            font: String::new(),
+            font_size: 0,
             languages: vec![Language { id: "ru".into(), ..Default::default() }],
         }
     }

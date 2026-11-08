@@ -48,6 +48,12 @@ pub fn dpi() -> i32 {
 }
 
 pub fn make_fonts() -> Fonts {
+    make_fonts_with("", 0)
+}
+
+/// Fonts with an optional custom face / size (points); falls back to the
+/// system dialog font.
+pub fn make_fonts_with(face: &str, size: u32) -> Fonts {
     unsafe {
         let mut ncm: NONCLIENTMETRICSW = std::mem::zeroed();
         ncm.cbSize = std::mem::size_of::<NONCLIENTMETRICSW>() as u32;
@@ -55,6 +61,15 @@ pub fn make_fonts() -> Fonts {
         let mut lf = ncm.lfMessageFont;
         if lf.lfHeight == 0 {
             lf.lfHeight = -(9 * dpi() / 72);
+        }
+        if size > 0 {
+            lf.lfHeight = -((size.min(72) as i32 * dpi() + 36) / 72);
+        }
+        let face = face.trim();
+        if !face.is_empty() {
+            let w: Vec<u16> = face.encode_utf16().take(31).collect();
+            lf.lfFaceName = [0; 32];
+            lf.lfFaceName[..w.len()].copy_from_slice(&w);
         }
         let normal = CreateFontIndirectW(&lf);
         let mut b = lf;

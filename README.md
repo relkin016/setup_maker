@@ -19,6 +19,7 @@ setupmaker                                  # графический редак�
 setupmaker new "My App" --exe MyApp.exe --files bin -o myapp.smp
 setupmaker build myapp.smp --verify         # собрать setup.exe и проверить CRC
 setupmaker import old.iss -o old.smp -D InnoDir=/path/to/inno   # конвертация Inno-скрипта
+setupmaker import "GTA ZA/setup.exe" -o gta                     # разбор готового Inno setup.exe в проект
 setupmaker build old.iss -D InnoDir=/path/to/inno               # или собрать .iss напрямую
 setupmaker pack gamedata -o data1.smpk --method lzma2 --dict 256 # внешний архив
 setupmaker verify compiled/setup.exe
@@ -26,10 +27,31 @@ setupmaker verify compiled/setup.exe
 
 В редакторе: **F9** — собрать, **Ctrl+S** — сохранить.
 
+## Импорт готового установщика Inno Setup (`setup.exe`)
+
+`setupmaker import setup.exe [-o папка]` (или кнопка «📦 Импорт setup.exe» в редакторе) разбирает
+скомпилированный установщик **Inno Setup 5.2.5 – 6.3** (ANSI и Unicode) и создаёт папку проекта
+(по умолчанию `setup_project` рядом с setup.exe):
+
+| Что | Куда |
+|---|---|
+| сведения о программе, папки, uninstall | `[app]`, `[setup]`, `[uninstall]` |
+| встроенные файлы (LZMA/LZMA2/zlib, фильтр x86, проверка SHA-1) | `files/<корень>_<задачи>/…` + записи `[[files]]` с условиями |
+| задачи, компоненты, типы, папки, ярлыки, реестр, `[Run]`, удаление | соответствующие списки |
+| картинки мастера, иконка setup.exe, лицензия / инфо (RTF) | `wizard.bmp`, `wizard_small.bmp`, `setup.ico`, `*.rtf` |
+| языки и `[CustomMessages]` | `[interface]`, `[messages]` |
+| файлы `{tmp}` (кроме ISDone.dll, records.inf, скинов) | `tools/` → «Инструменты» |
+
+Секция `[Code]` (Pascal) не переносится, её строки сохраняются в `code_strings.txt`. Из них
+автоматически берутся: вызовы ISDone (`{src}\*.arc` → раздел «Архивы»), шрифт мастера (`Candara`…),
+заголовки приветствия/завершения. Архивы, лежащие рядом с setup.exe, тоже добавляются.
+Для `.arc` положите `unarc.dll` из FreeArc в `tools/` и добавьте в «Инструменты» —
+ISDone.dll из оригинала не используется (прогресс, время, отмена и откат у нас встроены).
+
 ## Проект (`.smp`, TOML)
 
 Все разделы Inno Setup есть в проекте: `[app]` (AppName, AppVersion, AppId…), `[setup]` (страницы мастера,
-папки, лицензия, пароль, место на диске), `[interface]` (картинки, иконка, языки ru/en/uk), `[requirements]`,
+папки, лицензия, пароль, место на диске), `[interface]` (картинки, иконка, шрифт мастера `font`/`font_size`, языки ru/en/uk), `[requirements]`,
 `[compression]`, `[output]` (в т. ч. разбиение на тома), `[uninstall]`, а также списки
 `types`, `components`, `tasks`, `files`, `archives`, `tools`, `dirs`, `shortcuts`, `registry`,
 `run`, `uninstall_run`, `install_delete`, `uninstall_delete`, `messages`.
