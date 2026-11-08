@@ -273,7 +273,7 @@ pub struct Requirements {
 
 impl Default for Requirements {
     fn default() -> Self {
-        Self { min_windows: "10.0".into(), arch: "auto".into(), privileges: "admin".into(), min_ram_mb: 0 }
+        Self { min_windows: "6.1sp1".into(), arch: "auto".into(), privileges: "admin".into(), min_ram_mb: 0 }
     }
 }
 
