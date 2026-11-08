@@ -551,10 +551,26 @@ impl App {
         ui.collapsing("Переменные {#Имя} (defines)", |ui| {
             ui.label("Используются в любых полях как {#Имя}. Удобно для путей: {#InnoDir}\\MyApp\\files\\*");
             let mut remove = None;
+            let mut rename: Option<(String, String)> = None;
             let keys: Vec<String> = self.project.defines.keys().cloned().collect();
             for k in keys {
                 ui.horizontal(|ui| {
-                    ui.label(format!("{} =", k));
+                    // Name is edited in a temp buffer and applied on Enter / focus loss,
+                    // because renaming a BTreeMap key every keystroke would reorder rows
+                    // and steal focus.
+                    let id = ui.make_persistent_id(("define_name", &k));
+                    let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| k.clone());
+                    let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(140.0));
+                    if resp.lost_focus() {
+                        ui.data_mut(|d| d.remove::<String>(id));
+                        let new = buf.trim().trim_start_matches("{#").trim_end_matches('}').trim().to_string();
+                        if !new.is_empty() && new != k && !self.project.defines.contains_key(&new) {
+                            rename = Some((k.clone(), new));
+                        }
+                    } else if resp.has_focus() {
+                        ui.data_mut(|d| d.insert_temp(id, buf));
+                    }
+                    ui.label("=");
                     if let Some(v) = self.project.defines.get_mut(&k) {
                         ui.add(egui::TextEdit::singleline(v).desired_width(420.0));
                     }
@@ -565,6 +581,11 @@ impl App {
             }
             if let Some(k) = remove {
                 self.project.defines.remove(&k);
+            }
+            if let Some((old, new)) = rename {
+                if let Some(v) = self.project.defines.remove(&old) {
+                    self.project.defines.insert(new, v);
+                }
             }
             if ui.button("➕ Переменная").clicked() {
                 let mut n = 1;

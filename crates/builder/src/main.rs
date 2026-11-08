@@ -116,8 +116,29 @@ fn run_gui(p: Option<PathBuf>) -> i32 {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("GUI error: {}", e);
+            #[cfg(windows)]
+            gui_error_box(&e);
             1
         }
+    }
+}
+
+/// The editor is a GUI-subsystem app, so stderr is invisible when started from Explorer.
+/// Typical case: Windows 7 without an OpenGL 2.0 driver (VM, basic display adapter).
+#[cfg(all(windows, feature = "gui"))]
+fn gui_error_box(e: &str) {
+    extern "system" {
+        fn MessageBoxW(hwnd: *mut core::ffi::c_void, text: *const u16, caption: *const u16, ty: u32) -> i32;
+    }
+    let text = format!(
+        "Не удалось запустить графический редактор:\n{}\n\nНужен видеодрайвер с OpenGL 2.0+.\n\
+         Импорт и сборка работают из консоли:\n  setupmaker import setup.exe -o папка\n  setupmaker build проект.smp",
+        e
+    );
+    let w = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (t, c) = (w(&text), w("Setup Maker"));
+    unsafe {
+        MessageBoxW(core::ptr::null_mut(), t.as_ptr(), c.as_ptr(), 0x10);
     }
 }
 

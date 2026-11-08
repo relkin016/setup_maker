@@ -103,6 +103,10 @@ archives = ["data1.arc", "data2.smpk", "voice.7z -> {app}\\sound"]
 ## Ограничения
 
 - Установщик требует **Windows 10/11** (современный Rust не поддерживает Windows 7).
+- Сам редактор есть и для **Windows 7 SP1** (`setupmaker-*-windows7-x64.zip` / `-x86.zip`):
+  импорт/разбор `setup.exe`, конвертация `.iss`, сборка и упаковка работают. Графическому
+  редактору нужен драйвер с OpenGL 2.0+; без него (ВМ, «стандартный VGA») используйте консоль:
+  `setupmaker import setup.exe -o папка`. Собранные установщики по-прежнему требуют Windows 10+.
 - Код `[Code]` на Pascal не исполняется. Импортёр переносит из него активные вызовы ISDone
   (`ISArcExtract`, `IS7ZipExtract`, `ShowChangeDiskWindow`) в список архивов.
 - Скины ISSkin (`.cjstyles`) и RAR не поддерживаются; precomp/srep — через «Инструменты» + `[Run]`.
