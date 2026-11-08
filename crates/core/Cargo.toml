@@ -1,0 +1,20 @@
+[package]
+name = "smk-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared project model, payload format and codecs for Setup Maker"
+
+[features]
+default = []
+# Encoders (builder only). The stub needs decoders only.
+encode = ["zstd/zstdmt"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+crc32fast = "1"
+xz2 = { version = "0.1.7", features = ["static"] }
+zstd = { version = "0.13", default-features = false }
+brotli = { version = "7", default-features = false, features = ["std"] }

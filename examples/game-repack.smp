@@ -1,0 +1,122 @@
+# Пример: репак игры с компонентами и внешними архивами (аналог FreeArc/ISDone-шаблона).
+# Сборка: setupmaker build examples/game-repack.smp
+
+[app]
+name = "Demo Game"
+version = "1.0.678"
+publisher = "PC Edge"
+exe = "game.exe"
+url = "https://pcedge.github.io"
+app_id = "{5A0E6C1D-9F1B-4C55-9E62-0D3C2B7A1E01}"
+
+[setup]
+default_dir = '{pf}\{#AppName}'
+default_group = "{#AppName}"
+extra_disk_space = 0
+
+[interface]
+accent_color = "#7A1F1F"
+
+[[interface.languages]]
+id = "ru"
+
+[[interface.languages]]
+id = "en"
+
+[requirements]
+min_ram_mb = 512
+
+[compression]
+method = "lzma2"
+level = 9
+dict_mb = 64
+
+[output]
+dir = "out"
+base_name = "DemoGame_setup"
+
+[[types]]
+name = "full"
+description = "{cm:FullInstallation}"
+
+[[types]]
+name = "custom"
+description = "{cm:CustomInstallation}"
+custom = true
+
+[[components]]
+name = "game"
+description = "Игра"
+types = ["full", "custom"]
+fixed = true
+
+[[components]]
+name = "voice"
+description = "Язык озвучки"
+types = ["full"]
+
+[[components]]
+name = 'voice\rus'
+description = "Русский"
+types = ["full"]
+exclusive = true
+
+[[components]]
+name = 'voice\eng'
+description = "Английский"
+exclusive = true
+checked = false
+
+[[tasks]]
+name = "desktopicon"
+description = "{cm:CreateDesktopIcon}"
+group = "{cm:AdditionalIcons}"
+
+[[files]]
+source = 'game\*'
+
+# Внешние архивы — просто по именам. Лежат рядом с setup.exe.
+[[archives]]
+file = "data1.smpk"
+pack_from = "data"
+
+[[archives]]
+file = "voice_rus.zip"
+dest = '{app}\sound'
+components = 'voice\rus'
+
+[[archives]]
+file = "voice_eng.tar.xz"
+dest = '{app}\sound'
+components = 'voice\eng'
+
+[[shortcuts]]
+name = '{group}\{#AppName}'
+target = '{app}\game.exe'
+
+[[shortcuts]]
+name = '{autodesktop}\{#AppName}'
+target = '{app}\game.exe'
+tasks = "desktopicon"
+
+[[shortcuts]]
+name = '{group}\{cm:UninstallProgram,{#AppName}}'
+target = "{uninstallexe}"
+
+[[registry]]
+root = "HKA"
+subkey = 'Software\PC Edge\{#AppName}'
+value_name = "path"
+value_data = "{app}"
+uninstall = "deletekey"
+
+[[run]]
+filename = '{app}\game.exe'
+description = "{cm:LaunchProgram,{#AppName}}"
+postinstall = true
+nowait = true
+skip_if_silent = true
+
+[[uninstall_delete]]
+path = "{app}"
+kind = "filesandordirs"

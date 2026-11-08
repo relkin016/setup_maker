@@ -1,0 +1,56 @@
+[package]
+name = "smk-stub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Windows installer runtime (Inno-style wizard) for Setup Maker"
+build = "build.rs"
+
+[[bin]]
+name = "smk-stub"
+path = "src/main.rs"
+
+[dependencies]
+smk-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+crc32fast = "1"
+xz2 = { version = "0.1.7", features = ["static"] }
+zstd = { version = "0.13", default-features = false }
+brotli = { version = "7", default-features = false, features = ["std"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate", "lzma", "zstd", "aes-crypto", "bzip2"] }
+sevenz-rust2 = { version = "0.13", default-features = false, features = ["compress", "aes256", "deflate", "bzip2"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.59.0", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Environment",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_Shutdown",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_Controls",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows = { version = "=0.58.0", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_Storage_FileSystem",
+] }
