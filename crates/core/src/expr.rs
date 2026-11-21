@@ -205,6 +205,14 @@ impl Expr {
     }
 }
 
+/// Does the expression reference identifier `name` (case-insensitive)?
+pub fn mentions(s: &str, name: &str) -> bool {
+    let Ok(e) = parse(s) else { return false };
+    let mut v = Vec::new();
+    e.idents(&mut v);
+    v.iter().any(|x| x.eq_ignore_ascii_case(name))
+}
+
 /// Evaluate; empty string is `true`; parse errors evaluate to `true`
 /// (validated by the builder beforehand).
 pub fn eval_str(s: &str, f: &mut dyn FnMut(&str, &[String]) -> bool) -> bool {
@@ -228,6 +236,8 @@ mod tests {
         assert!(eval_str("voice text\\rus", &mut f));
         assert!(!eval_str("not x", &mut f));
         assert!(eval_str("x and (voice or text\\rus)", &mut f));
+        assert!(mentions("game or Patches", "patches"));
+        assert!(!mentions("FileExists('patches')", "patches"));
         let mut g = |n: &str, a: &[String]| n == "FileExists" && a[0] == "{app}\\a b.exe";
         assert!(eval_str("FileExists('{app}\\a b.exe')", &mut g));
     }

@@ -127,7 +127,13 @@ pub fn check_ok(s: &str, ctx: &Ctx) -> bool {
             "is64bitinstallmode" => cfg!(target_pointer_width = "64"),
             "iswin64" => w::is_win64(),
             "isadmin" | "isadmininstallmode" | "isadminloggedon" => ctx.admin,
-            "fileexists" => Path::new(&a0).is_file(),
+            "fileexists" => {
+                if smk_core::wildcard::has_wildcard(&a0) {
+                    !archives::find_archives(Path::new(&ctx.src), &a0).is_empty()
+                } else {
+                    Path::new(&a0).is_file()
+                }
+            }
             "direxists" => Path::new(&a0).is_dir(),
             "regkeyexists" => reg::full_key_exists(&a0),
             "regvalueexists" => {
@@ -139,6 +145,69 @@ pub fn check_ok(s: &str, ctx: &Ctx) -> bool {
             _ => true,
         }
     })
+}
+
+/// Drop components that are unavailable on this machine: their `check` is
+/// false, or (with `hide_if_no_archives`) they have no embedded files of
+/// their own and none of their archives (masks like `patch*.zip`, or optional
+/// plain names) are found next to setup.exe.
+/// Children go together with the parent. If something was dropped and a
+/// single component is left, it becomes fixed (nothing to choose from).
+pub fn prune_components(h: &mut smk_core::format::Header, ctx: &Ctx) {
+    use smk_core::expr::mentions;
+    let m = &h.manifest;
+    let n = m.components.len();
+    let own_files = |name: &str| h.streams.iter().any(|s| !s.files.is_empty() && mentions(&s.when.components, name));
+    let own_archives = |name: &str| m.archives.iter().filter(|a| mentions(&a.when.components, name)).collect::<Vec<_>>();
+    let parent_of = |i: usize| {
+        let (p, _) = m.components[i].name.rsplit_once('\\')?;
+        m.components.iter().position(|c| c.name.eq_ignore_ascii_case(p))
+    };
+    let mut hide = vec![false; n];
+    for (i, c) in m.components.iter().enumerate() {
+        let by_check = !c.check.trim().is_empty() && !check_ok(&c.check, ctx);
+        let by_archives = c.hide_if_no_archives && {
+            let own = own_archives(&c.name);
+            !own_files(&c.name)
+                && !own.is_empty()
+                // a mask (`patch*.zip`) means "any number of files"; a plain
+                // name counts only if optional; disk-prompted ones may be on another disk
+                && own.iter().all(|a| a.disk_prompt.trim().is_empty() && (!a.required || smk_core::wildcard::has_wildcard(&a.file)))
+                && own.iter().all(|a| archives::find_archives(Path::new(&ctx.src), &ctx.expand(&a.file)).is_empty())
+        };
+        hide[i] = by_check || by_archives;
+    }
+    // children follow a hidden parent
+    for i in 0..n {
+        let mut p = parent_of(i);
+        while let Some(k) = p {
+            if hide[k] {
+                hide[i] = true;
+                break;
+            }
+            p = parent_of(k);
+        }
+    }
+    // an empty group whose children are all hidden goes too (deepest first)
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(m.components[i].name.matches('\\').count()));
+    for i in order {
+        let c = &m.components[i];
+        let kids: Vec<usize> = (0..n).filter(|&j| parent_of(j) == Some(i)).collect();
+        if !hide[i] && c.hide_if_no_archives && !kids.is_empty() && kids.iter().all(|&k| hide[k]) && !own_files(&c.name) && own_archives(&c.name).is_empty() {
+            hide[i] = true;
+        }
+    }
+    if !hide.iter().any(|&x| x) {
+        return;
+    }
+    let mut it = hide.into_iter();
+    let m = &mut h.manifest;
+    m.components.retain(|_| !it.next().unwrap());
+    if m.components.len() == 1 {
+        m.components[0].fixed = true;
+        m.components[0].checked = true;
+    }
 }
 
 pub struct Installer<'a> {

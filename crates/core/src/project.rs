@@ -374,6 +374,15 @@ pub struct Component {
     pub checked: bool,
     #[serde(skip_serializing_if = "is_zero_u64")]
     pub extra_disk_space: u64,
+    /// Show the component only if this condition is true
+    /// (e.g. `FileExists('{src}\patch*.zip')`).
+    #[serde(skip_serializing_if = "is_empty")]
+    pub check: String,
+    /// Hide the component when it has no embedded files of its own and none
+    /// of its archives (masks like `patch*.zip`, or optional plain names)
+    /// are found next to setup.exe.
+    #[serde(skip_serializing_if = "is_true")]
+    pub hide_if_no_archives: bool,
 }
 
 impl Default for Component {
@@ -386,6 +395,8 @@ impl Default for Component {
             exclusive: false,
             checked: true,
             extra_disk_space: 0,
+            check: String::new(),
+            hide_if_no_archives: true,
         }
     }
 }

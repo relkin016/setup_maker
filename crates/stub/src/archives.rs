@@ -39,7 +39,7 @@ pub fn find_archives(dir: &Path, pattern: &str) -> Vec<PathBuf> {
                 .collect()
         })
         .unwrap_or_default();
-    v.sort_by_key(|p| p.to_string_lossy().to_lowercase());
+    v.sort_by(|a, b| smk_core::wildcard::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
     v
 }
 

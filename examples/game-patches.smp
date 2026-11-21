@@ -1,0 +1,48 @@
+# Пример: игра + необязательные патчи patch*.zip рядом с setup.exe.
+# Пользователь выбирает «Игра», «Патчи» или оба пункта. Если рядом с
+# setup.exe нет ни одного patch*.zip, пункт «Патчи» не показывается, а раз
+# выбирать больше нечего — страница компонентов пропускается целиком.
+# Патчи ставятся по порядку: patch1, patch2, …, patch10.
+# Сборка: setupmaker build examples/game-patches.smp
+
+[app]
+name = "Demo Game"
+version = "1.0"
+exe = "game.exe"
+app_id = "{5A0E6C1D-9F1B-4C55-9E62-0D3C2B7A1E02}"
+
+[setup]
+default_dir = '{pf}\{#AppName}'
+default_group = "{#AppName}"
+# «только патчи» ставятся в папку, куда игра уже установлена
+use_previous_dir = true
+
+[[interface.languages]]
+id = "ru"
+
+[output]
+dir = "out"
+base_name = "DemoGame_setup"
+
+[[components]]
+name = "game"
+description = "Игра"
+
+[[components]]
+name = "patches"
+description = "Патчи"
+
+[[files]]
+source = 'game\*'
+recursive = true
+components = "game"
+
+[[archives]]
+file = "patch*.zip"
+dest = "{app}"
+components = "patches"
+
+[[shortcuts]]
+name = '{group}\{#AppName}'
+target = '{app}\game.exe'
+components = "game"

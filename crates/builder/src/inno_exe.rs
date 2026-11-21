@@ -1326,6 +1326,7 @@ pub fn import(setup: &Path, out_dir: &Path, log: &dyn Fn(&str)) -> R<ExeImport> 
             exclusive: c.options & 8 != 0,
             checked: true,
             extra_disk_space: c.extra,
+            ..Default::default()
         });
         checks.push(drop_check(&c.check));
     }

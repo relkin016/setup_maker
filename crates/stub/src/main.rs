@@ -132,6 +132,18 @@ mod app {
                 return 1;
             }
         };
+        let mut payload = payload;
+        {
+            // hide components whose patches/archives are not next to setup.exe
+            let pre = Ctx {
+                admin: w::is_admin(),
+                src: payload.src_dir.to_string_lossy().to_string(),
+                srcexe: exe.to_string_lossy().to_string(),
+                params: parse(&argv).params,
+                ..Default::default()
+            };
+            install::prune_components(&mut payload.header, &pre);
+        }
         let p: &'static Payload = Box::leak(Box::new(payload));
         let m = &p.header.manifest;
         let a = parse(&argv);

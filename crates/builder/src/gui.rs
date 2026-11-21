@@ -1664,6 +1664,7 @@ impl App {
         let pr = Pretty::new(&self.project);
         card(ui, "Компоненты", |ui| {
             hint(ui, "Пользователь отмечает их на странице «Выбор компонентов». Вложенность — через «\\» в коде: voice, voice\\rus.");
+            hint(ui, "Компонент без своих файлов, у которого не нашлось ни одного архива (например, patch*.zip), в установщике не показывается. Если остался один компонент — страница выбора пропускается.");
             let types: Vec<(String, String)> = self.project.types.iter().map(|t| (t.name.clone(), pr.text(&t.description))).collect();
             list_editor(
                 ui,
@@ -1679,6 +1680,8 @@ impl App {
                         check(ui, "Отмечен по умолчанию", &mut c.checked);
                         check(ui, "Обязательный (нельзя снять)", &mut c.fixed);
                         check(ui, "Выбор одного из соседних (переключатель)", &mut c.exclusive);
+                        check(ui, "Скрывать, если его архивов нет рядом с setup.exe", &mut c.hide_if_no_archives);
+                        text(ui, "Показывать, только если:", &mut c.check, "FileExists('{src}\\patch*.zip')");
                         label(ui, "Доп. место на диске:");
                         mb_field(ui, &mut c.extra_disk_space);
                         ui.end_row();

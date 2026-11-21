@@ -387,7 +387,8 @@ impl Wizard {
             Page::Password => !self.p.header.password_hash.is_empty(),
             Page::InfoBefore => has_text_res(self.p, "infobefore", lang),
             Page::Dir => s.show_dir_page,
-            Page::Components => !self.m.components.is_empty(),
+            // nothing to choose when every component is fixed
+            Page::Components => self.m.components.iter().any(|c| !c.fixed),
             Page::Group => s.show_group_page && self.uses_group(),
             Page::Tasks => !self.visible_tasks().is_empty(),
             Page::Ready => s.show_ready_page,

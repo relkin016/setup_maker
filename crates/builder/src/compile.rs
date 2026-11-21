@@ -684,6 +684,7 @@ pub fn validate(p: &Project) -> Vec<String> {
         if c.name.trim().is_empty() {
             errs.push("Компоненты: пустое имя".into());
         }
+        check_expr("Компоненты", &c.check, &mut errs);
     }
     errs
 }
