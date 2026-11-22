@@ -19,6 +19,56 @@ fn ver4(s: &str) -> (u32, u32) {
     ((a << 16) | b, (c << 16) | d)
 }
 
+/// Workaround for GNU ld (mingw): it emits bogus IMAGE_REL_BASED_HIGHLOW base
+/// relocations (type 3) on the 32-bit TLS-offset displacements in x64 code
+/// (`mov rcx, gs:[0x58]; ... lea rsi, [rax+0xb8]`). HIGHLOW is invalid in PE32+;
+/// under ASLR the loader adds the image-base delta to those offsets and the
+/// stub crashes at start-up. Turning them into ABSOLUTE (type 0) padding is safe.
+pub fn fix_pe64_relocs(d: &mut [u8]) {
+    let u16at = |d: &[u8], o: usize| u16::from_le_bytes([d[o], d[o + 1]]);
+    let u32at = |d: &[u8], o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+    if d.len() < 0x100 || &d[0..2] != b"MZ" {
+        return;
+    }
+    let e = u32at(d, 0x3c) as usize;
+    if d.len() < e + 24 + 112 + 48 || &d[e..e + 4] != b"PE\0\0" || u16at(d, e + 24) != 0x20b {
+        return; // not PE32+
+    }
+    let nsec = u16at(d, e + 6) as usize;
+    let opt = u16at(d, e + 20) as usize;
+    let dir = e + 24 + 112 + 5 * 8; // base relocation directory
+    let (rel_rva, rel_sz) = (u32at(d, dir), u32at(d, dir + 4) as usize);
+    if rel_rva == 0 || rel_sz == 0 {
+        return;
+    }
+    let mut ro = None;
+    for i in 0..nsec {
+        let o = e + 24 + opt + 40 * i;
+        let (vs, va, rs, rp) = (u32at(d, o + 8), u32at(d, o + 12), u32at(d, o + 16), u32at(d, o + 20));
+        if rel_rva >= va && rel_rva < va + vs.max(rs) {
+            ro = Some((rp + rel_rva - va) as usize);
+            break;
+        }
+    }
+    let Some(ro) = ro else { return };
+    let end = (ro + rel_sz).min(d.len());
+    let mut p = ro;
+    while p + 8 <= end {
+        let size = u32at(d, p + 4) as usize;
+        if size < 8 || p + size > end {
+            break;
+        }
+        for i in 0..(size - 8) / 2 {
+            let o = p + 8 + 2 * i;
+            if u16at(d, o) >> 12 == 3 {
+                d[o] = 0;
+                d[o + 1] = 0;
+            }
+        }
+        p += size;
+    }
+}
+
 pub fn patch(stub: &[u8], icon: Option<&[u8]>, p: &Project) -> Result<Vec<u8>, String> {
     let mut image = editpe::Image::parse(stub.to_vec()).map_err(|e| e.to_string())?;
     let mut res = image.resource_directory().cloned().unwrap_or_default();
@@ -52,5 +102,6 @@ pub fn patch(stub: &[u8], icon: Option<&[u8]>, p: &Project) -> Result<Vec<u8>, S
     image.set_resource_directory(res).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     image.write_writer(&mut out).map_err(|e| e.to_string())?;
+    fix_pe64_relocs(&mut out);
     Ok(out)
 }
