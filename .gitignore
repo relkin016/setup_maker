@@ -3,3 +3,5 @@
 /dist
 *.exe.tmp
 *.smpk.tmp
+claude.md
+setupmaker
