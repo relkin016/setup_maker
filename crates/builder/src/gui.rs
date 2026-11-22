@@ -764,18 +764,27 @@ fn list_editor<T: Default + Clone>(
             *sel = Some(i + 1);
         }
         if ui.add_enabled(has, egui::Button::new("✖ Удалить")).clicked() {
-            items.remove(sel.unwrap());
+            if let Some(i) = *sel {
+                if i < items.len() {
+                    items.remove(i);
+                }
+            }
             *sel = None;
         }
-        if ui.add_enabled(has && sel.unwrap() > 0, egui::Button::new("⬆")).on_hover_text("Выше").clicked() {
-            let i = sel.unwrap();
-            items.swap(i, i - 1);
-            *sel = Some(i - 1);
+        // `sel` may have changed above (delete), so re-evaluate instead of reusing `has`.
+        let cur = sel.filter(|&i| i < items.len());
+        if ui.add_enabled(cur.is_some_and(|i| i > 0), egui::Button::new("⬆")).on_hover_text("Выше").clicked() {
+            if let Some(i) = cur {
+                items.swap(i, i - 1);
+                *sel = Some(i - 1);
+            }
         }
-        if ui.add_enabled(has && sel.unwrap() + 1 < items.len(), egui::Button::new("⬇")).on_hover_text("Ниже").clicked() {
-            let i = sel.unwrap();
-            items.swap(i, i + 1);
-            *sel = Some(i + 1);
+        let cur = sel.filter(|&i| i < items.len());
+        if ui.add_enabled(cur.is_some_and(|i| i + 1 < items.len()), egui::Button::new("⬇")).on_hover_text("Ниже").clicked() {
+            if let Some(i) = cur {
+                items.swap(i, i + 1);
+                *sel = Some(i + 1);
+            }
         }
     });
     ui.add_space(6.0);
