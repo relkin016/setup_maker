@@ -167,6 +167,7 @@ struct App {
     cancel: Arc<AtomicBool>,
     status: String,
     archive_quick: String,
+    reference: crate::gui_ref::RefState,
 }
 
 pub fn run(project: Option<PathBuf>) -> Result<(), String> {
@@ -260,6 +261,7 @@ impl App {
             cancel: Arc::new(AtomicBool::new(false)),
             status: "Новый проект".into(),
             archive_quick: String::new(),
+            reference: Default::default(),
         }
     }
 
@@ -885,6 +887,9 @@ impl eframe::App for App {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save(false);
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.reference.open = !self.reference.open;
+        }
         let dirty = self.dirty();
         let title = format!(
             "Setup Maker {} — {}{}",
@@ -937,6 +942,7 @@ impl eframe::App for App {
                 ui.add_space(16.0);
             });
         });
+        crate::gui_ref::window(ctx, &mut self.reference, &self.project, TEXT, MUTED);
     }
 }
 
@@ -1031,6 +1037,10 @@ impl App {
                         if let Some(p) = rfd::FileDialog::new().add_filter("Установщик", &["exe"]).pick_file() {
                             self.import_exe(&p);
                         }
+                    }
+                    ui.separator();
+                    if ui.button("📖  Справочник").on_hover_text("Все константы и переменные: {app}, {pf}, {#AppName}… (F1)").clicked() {
+                        self.reference.open = !self.reference.open;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let running = self.build.lock().unwrap().running;

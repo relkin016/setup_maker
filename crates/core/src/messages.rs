@@ -435,6 +435,11 @@ fn table(lang: &str) -> Table {
     }
 }
 
+/// All built-in messages of a language (for the editor's reference).
+pub fn all(lang: &str) -> &'static [(&'static str, &'static str)] {
+    table(lang)
+}
+
 /// Built-in message, falling back to English, then to the key itself.
 pub fn builtin(lang: &str, key: &str) -> Option<&'static str> {
     let find = |t: Table| t.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| *v);

@@ -4,6 +4,8 @@
 mod compile;
 #[cfg(feature = "gui")]
 mod gui;
+#[cfg(feature = "gui")]
+mod gui_ref;
 mod images;
 mod inno_exe;
 mod pe;
