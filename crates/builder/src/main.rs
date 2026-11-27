@@ -10,6 +10,7 @@ mod images;
 mod inno_exe;
 mod pe;
 mod project_io;
+mod smp_exe;
 mod stubs;
 mod sysinfo;
 
@@ -39,7 +40,7 @@ enum Cmd {
         #[arg(long)]
         verify: bool,
     },
-    /// Разобрать готовый установщик Inno Setup (setup.exe) в папку проекта
+    /// Разобрать готовый установщик (Setup Maker или Inno Setup) в папку проекта
     Import {
         setup: PathBuf,
         /// Папка проекта (по умолчанию <имя>_project рядом с setup.exe)
@@ -168,7 +169,7 @@ fn run_cli(cmd: Cmd) -> Result<(), String> {
         }
         Cmd::Import { setup, out } => {
             if !is_exe(&setup) {
-                return Err("ожидается установщик Inno Setup (.exe)".into());
+                return Err("ожидается установщик (.exe)".into());
             }
             let dir = out.unwrap_or_else(|| default_import_dir(&setup));
             let log = |s: &str| {
@@ -178,7 +179,7 @@ fn run_cli(cmd: Cmd) -> Result<(), String> {
                     eprintln!("{}", s);
                 }
             };
-            let r = inno_exe::import(&setup, &dir, &log)?;
+            let r = smp_exe::import_any(&setup, &dir, &log)?;
             for w in &r.imported.warnings {
                 eprintln!("Предупреждение: {}", w);
             }

@@ -847,7 +847,7 @@ fn chunk_reader(raw: Box<dyn Read>, compressed: bool) -> R<Box<dyn Read>> {
 
 // ---------------------------------------------------------------- PE icon
 
-fn extract_icon(exe_head: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn extract_icon(exe_head: &[u8]) -> Option<Vec<u8>> {
     use editpe::{ResourceEntry, ResourceEntryName};
     let img = editpe::Image::parse(exe_head).ok()?;
     let res = img.resource_directory()?;
@@ -966,7 +966,7 @@ fn is_archive_name(s: &str) -> bool {
 
 // ---------------------------------------------------------------- conversion
 
-fn split_root(dest: &str) -> (String, String) {
+pub(crate) fn split_root(dest: &str) -> (String, String) {
     let d = dest.trim_start_matches('\\');
     if d.starts_with('{') {
         if let Some(end) = d.find('}') {
@@ -1008,7 +1008,7 @@ fn split_leaked(s: &str) -> (String, Vec<(String, String)>) {
     (head, out)
 }
 
-fn sanitize(s: &str) -> String {
+pub(crate) fn sanitize(s: &str) -> String {
     let t: String = s.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
     let mut out = String::new();
     for c in t.chars() {
@@ -1019,7 +1019,7 @@ fn sanitize(s: &str) -> String {
     out.trim_matches('_').chars().take(40).collect()
 }
 
-fn safe_rel(rel: &str) -> Option<PathBuf> {
+pub(crate) fn safe_rel(rel: &str) -> Option<PathBuf> {
     let mut p = PathBuf::new();
     for part in rel.split(['\\', '/']) {
         match part {

@@ -20,6 +20,7 @@ setupmaker                                  # графический редак�
 setupmaker new "My App" --exe MyApp.exe --files bin -o myapp.smp
 setupmaker build myapp.smp --verify         # собрать setup.exe и проверить CRC
 setupmaker import "GTA ZA/setup.exe" -o gta                     # разбор готового Inno setup.exe в проект
+setupmaker import old/setup.exe -o old_project                 # декомпиляция setup.exe, собранного Setup Maker
 setupmaker pack gamedata -o data1.smpk --method lzma2 --dict 256 # внешний архив
 setupmaker verify compiled/setup.exe
 ```
@@ -46,6 +47,25 @@ setupmaker verify compiled/setup.exe
 заголовки приветствия/завершения. Архивы, лежащие рядом с setup.exe, тоже добавляются.
 Для `.arc` положите `unarc.dll` из FreeArc в `tools/` и добавьте в «Инструменты» —
 ISDone.dll из оригинала не используется (прогресс, время, отмена и откат у нас встроены).
+
+## Декомпиляция установщика Setup Maker
+
+Та же команда `setupmaker import setup.exe [-o папка]` (и кнопка «Импорт setup.exe») распознаёт
+установщики, собранные самим Setup Maker, и восстанавливает из них проект, который снова
+собирается в эквивалентный setup.exe:
+
+| Что | Куда |
+|---|---|
+| все настройки, языки, сообщения, компоненты, задачи, ярлыки, реестр, `[Run]`, архивы | `.smp` как в исходном проекте (define уже подставлены) |
+| встроенные файлы (проверка CRC, дубликаты, даты изменения) | `files/<корень>/…` + записи `[[files]]` с условиями, флагами и атрибутами |
+| пустые папки | внутри `files/<корень>/`, `empty_dirs = true` |
+| инструменты | `tools/` → «Инструменты» |
+| лицензия / инфо (общие и по языкам) | `license.rtf`, `infobefore_ru.txt`… |
+| картинки мастера, иконки setup.exe и деинсталлятора | `wizard.png`, `wizard_small.png`, `setup.ico`, `uninstall.ico` |
+
+Тома `<имя>-N.bin` (разбиение на диски) должны лежать рядом с setup.exe. Пароль восстановить нельзя
+(хранится только хэш) — задайте его заново. Внешние архивы в setup.exe не входят — положите их рядом
+с собранным установщиком.
 
 ## Редактор
 

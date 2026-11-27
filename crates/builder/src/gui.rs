@@ -273,7 +273,7 @@ impl App {
         self.path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     }
 
-    /// Import a compiled Inno Setup installer into `<dir>/setup_project/`
+    /// Import a compiled installer (Setup Maker or Inno Setup) into `<dir>/setup_project/`
     /// (in the background; the project opens when done).
     fn import_exe(&mut self, p: &Path) {
         if self.build.lock().unwrap().running {
@@ -299,7 +299,7 @@ impl App {
                     b.log.push(s.to_string());
                 }
             };
-            let r = crate::inno_exe::import(&p, &dir, &log).and_then(|r| {
+            let r = crate::smp_exe::import_any(&p, &dir, &log).and_then(|r| {
                 project_io::save(&r.imported.project, &r.project_path)?;
                 Ok(r)
             });
@@ -1031,7 +1031,7 @@ impl App {
                     ui.separator();
                     if ui
                         .button("📥  Импорт setup.exe")
-                        .on_hover_text("Разобрать готовый установщик Inno Setup 5.2.5–6.3 в проект: файлы, ярлыки, картинки, архивы")
+                        .on_hover_text("Разобрать готовый установщик (Setup Maker или Inno Setup 5.2.5–6.3) в проект: файлы, ярлыки, картинки, архивы")
                         .clicked()
                     {
                         if let Some(p) = rfd::FileDialog::new().add_filter("Установщик", &["exe"]).pick_file() {
