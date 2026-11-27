@@ -775,15 +775,41 @@ pub fn read_dat(b: &[u8]) -> R<UninstData> {
     serde_json::from_slice(&b[8..]).map_err(|e| e.to_string())
 }
 
+/// Disk space (and progress weight) of an archive item: the installer looks
+/// into the archives next to setup.exe and sums their unpacked sizes. Files
+/// whose size can't be read (FreeArc, tar.br, ...) use the builder's hint or
+/// a rough "packed x2" guess.
 pub fn archive_weight(a: &smk_core::project::ArchiveItem, ctx: &Ctx) -> u64 {
-    if a.size_hint > 0 {
-        return a.size_hint;
-    }
     let pattern = ctx.expand(&a.file);
     let found = archives::find_archives(Path::new(&ctx.src), &pattern);
-    let s: u64 = found.iter().map(|f| f.metadata().map(|m| m.len()).unwrap_or(0)).sum();
+    if found.is_empty() {
+        // not inserted yet (other disk) / optional and missing
+        return if a.size_hint > 0 { a.size_hint } else { 1 << 20 };
+    }
+    let password = ctx.expand(&a.password);
+    let (mut known, mut unknown_packed, mut all_known) = (0u64, 0u64, true);
+    for f in &found {
+        let fmt = if a.format.is_empty() {
+            smk_core::project::archive_format_by_name(&f.to_string_lossy()).to_string()
+        } else {
+            a.format.to_ascii_lowercase()
+        };
+        match archives::unpacked_size(&fmt, f, &password) {
+            Some(s) => known += s,
+            None => {
+                all_known = false;
+                unknown_packed += f.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    if all_known {
+        return known.max(1);
+    }
+    if a.size_hint > 0 && known == 0 {
+        return a.size_hint;
+    }
     // unpacked data is usually ~2-3x bigger
-    (s * 2).max(1 << 20)
+    (known + unknown_packed * 2).max(1 << 20)
 }
 
 fn newer_or_same(dest: &Path, mtime: u64) -> bool {

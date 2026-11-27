@@ -634,12 +634,8 @@ pub fn pack_folder(src: &Path, out: &Path, p: &Project, bo: &BuildOptions) -> R<
 /// Unpacked size of an existing archive, when cheaply known.
 fn archive_raw_size(path: &Path) -> Option<u64> {
     let fmt = smk_core::project::archive_format_by_name(&path.to_string_lossy());
-    if fmt == "smpk" {
-        let mut f = File::open(path).ok()?;
-        let (h, _) = format::read_smpk_header(&mut f).ok()?;
-        return Some(h.total_raw);
-    }
-    None
+    let mut f = std::io::BufReader::new(File::open(path).ok()?);
+    smk_core::unpacked::raw_size(fmt, &mut f)
 }
 
 // ---------------------------------------------------------------- main build

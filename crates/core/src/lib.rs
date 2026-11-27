@@ -6,6 +6,7 @@ pub mod expr;
 pub mod format;
 pub mod messages;
 pub mod project;
+pub mod unpacked;
 pub mod wildcard;
 
 /// Version of the whole tool chain (builder + stub must match).

@@ -43,6 +43,49 @@ pub fn find_archives(dir: &Path, pattern: &str) -> Vec<PathBuf> {
     v
 }
 
+/// Unpacked size of one archive file read from its header/index (no data is
+/// decompressed). `None` = unknown (FreeArc, tar.br, damaged, wrong password
+/// for encrypted 7z headers...). Results are cached per path + size + mtime:
+/// the wizard asks again on every component click.
+pub fn unpacked_size(fmt: &str, path: &Path, password: &str) -> Option<u64> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    type Key = (PathBuf, String, u64, Option<std::time::SystemTime>);
+    static CACHE: OnceLock<Mutex<HashMap<Key, Option<u64>>>> = OnceLock::new();
+    let md = path.metadata().ok()?;
+    let key = (path.to_path_buf(), fmt.to_string(), md.len(), md.modified().ok());
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(v) = cache.lock().unwrap().get(&key) {
+        return *v;
+    }
+    let v = read_unpacked_size(fmt, path, password);
+    cache.lock().unwrap().insert(key, v);
+    v
+}
+
+fn read_unpacked_size(fmt: &str, path: &Path, password: &str) -> Option<u64> {
+    let mut f = io::BufReader::new(File::open(path).ok()?);
+    match fmt {
+        "zip" => {
+            let mut z = zip::ZipArchive::new(f).ok()?;
+            let mut s = 0u64;
+            for i in 0..z.len() {
+                let e = z.by_index_raw(i).ok()?;
+                if !e.is_dir() {
+                    s += e.size();
+                }
+            }
+            Some(s)
+        }
+        "7z" => {
+            let pw = sevenz_rust2::Password::from(password);
+            let a = sevenz_rust2::Archive::read(&mut f, pw.as_slice()).ok()?;
+            Some(a.files.iter().filter(|e| !e.is_directory()).map(|e| e.size()).sum())
+        }
+        other => smk_core::unpacked::raw_size(other, &mut f),
+    }
+}
+
 /// Sanitize an archive entry name into a relative path.
 pub fn safe_rel(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
